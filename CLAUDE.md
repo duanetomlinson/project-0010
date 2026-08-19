@@ -7,6 +7,14 @@ decision record; tests are `stepN_*.py`, run via `import stepN_...`.
 
 ## Learnings
 
+### 2026-08-19 · Verify each motor corner by single-pin isolation — wiring notes lie, and dirty pin state ruins the test · Claude Fable 5, session 01EBGTBFkoL9KmkfpZZXKsc1
+
+**What I did:** Trusted the user's detailed wiring notes for the GPIO→corner map, and ran motor tests with scaffolding that held multiple PWM channels and drove EEP/read nFAULT every run.
+**What went wrong:** The left-side corners were swapped in the notes (GPIO3 is front-left, not rear-left), and the scaffolding produced "all four motors spin from one pin" — masking the real behavior; EEP (GPIO5) also turned out to be hardware-held high, so driving it low stressed the pin and caused a phantom nFAULT via rail dip.
+**Root cause:** Isolation tests weren't isolated — extra driven pins and stale assumptions about EEP changed the system under test.
+**Rule to follow:** To identify a motor channel, release every related pin to a plain input and PWM exactly one pin at a time; and never drive a line as an output before measuring what the hardware does with it at rest (input + pull, both directions).
+**Where it applies:** `step6_motors.py`, `config.py` motor map, all future motor/ESC bring-up in this repo.
+
 ### 2026-08-18 · Motors DO spin on USB — the star's VCC is fed from the board 5V rail, not battery-only · Claude Fable 5, session 01EBGTBFkoL9KmkfpZZXKsc1
 
 **What I did:** Ran step6_motors as a "safe dry run" claiming motors could not spin on USB because motor VCC comes from the battery star.

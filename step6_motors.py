@@ -2,25 +2,23 @@
 step6_motors.py -- DRV8833 motor drive bring-up
 
 PROPS OFF. This test spins motors. Do not run with propellers mounted.
+Motors spin on USB power too (5V pin shares the USB VBUS rail) -- every
+run is LIVE.
 
-Hardware under test: 2x DRV8833 modules, one GPIO per motor (the second
-input of each channel is jumpered to GND on the module, so PWM on IN1
-drives forward, low coasts). EEP (nSLEEP) and ULT (nFAULT) are each one
-wire Y-spliced to both modules. Motor power comes from the star point,
-which is fed by BOTH the battery and the board's 5V rail -- verified
-live 2026-08-18: motors DO spin on USB power alone. There is no safe
-"dry run" power state; treat every run as live.
+Hardware facts, verified live 2026-08-19:
+  - Pin map (per-pin isolation runs): GPIO1=front-right, GPIO2=rear-right,
+    GPIO3=front-left, GPIO4=rear-left.
+  - EEP (GPIO5) is externally held HIGH -- the drivers are always awake,
+    so this test does NOT touch GPIO5. Do not drive it as an output
+    until the J1 / 5-6 wire question is resolved in hardware.
+  - Reliable isolation requires the clean-pin pattern used here: release
+    every motor pin to a plain input, then PWM exactly one pin at a
+    time, deinit before moving on. Earlier scaffolding that held
+    multiple PWM channels + drove EEP produced all-four-spinning.
 
-What this proves, in order:
-  1. WAKE    -- EEP high wakes both drivers, nFAULT reads healthy.
-  2. SPIN    -- each motor alone: soft ramp to test duty, hold, stop.
-                You confirm by eye that the RIGHT motor spun the
-                RIGHT direction (labels printed at each step).
-  3. ALL     -- all four together at reduced duty: catches battery sag
-                and shared-ground problems that single motors hide.
-  4. FAULT   -- nFAULT checked after every stage; any LOW aborts.
-
-Cleanup always runs: all PWM to zero, drivers back to sleep.
+Sequence: each motor alone (soft ramp -> hold -> stop -> release), then
+all four together briefly. nFAULT (GPIO6, open-drain active-low) is
+read after every stage; any LOW aborts. Cleanup always runs.
 
 Run from the REPL:  import step6_motors
 Re-run after edit:  Ctrl-D (soft reboot), then import again.
@@ -30,41 +28,35 @@ import time
 from machine import Pin, PWM
 import config
 
-# Bench-test power levels. Full scale is 65535.
-SPIN_DUTY = 20_000          # ~30% -- enough to spin bare coreless motors
+SPIN_DUTY = 20_000          # ~30% of 65535 -- bench spin, props off
 ALL_DUTY = 13_000           # ~20% -- gentler when all four run at once
 SPIN_MS = 1500              # per-motor run time
+GAP_MS = 800                # pause between motors so you can tell them apart
 RAMP_STEPS = 10             # soft-start steps (avoids inrush current spike)
 
-# Order matters: printed labels are how you verify position + direction.
 MOTORS = (
-    ("M1 front-right, should spin CCW", config.MOTOR_FR),
-    ("M2 rear-right,  should spin CW",  config.MOTOR_RR),
-    ("M3 rear-left,   should spin CCW", config.MOTOR_RL),
-    ("M4 front-left,  should spin CW",  config.MOTOR_FL),
+    ("front-right, should spin CCW", config.MOTOR_FR),
+    ("rear-right,  should spin CW",  config.MOTOR_RR),
+    ("front-left,  should spin CW",  config.MOTOR_FL),
+    ("rear-left,   should spin CCW", config.MOTOR_RL),
 )
 
-sleep_pin = Pin(config.MOTOR_SLEEP, Pin.OUT, value=0)   # start asleep
-fault_pin = Pin(config.MOTOR_FAULT, Pin.IN, Pin.PULL_UP)
-
-pwms = []
-for label, gpio in MOTORS:
-    p = PWM(Pin(gpio), freq=config.MOTOR_PWM_FREQ, duty_u16=0)
-    pwms.append((label, p))
+ALL_PINS = tuple(g for _, g in MOTORS)
 
 
-def stop_all():
-    for _, p in pwms:
-        p.duty_u16(0)
+def release_all():
+    for g in ALL_PINS:
+        Pin(g, Pin.IN)              # plain input: no drive, no pull
 
 
 def check_fault(stage):
     """nFAULT is open-drain active-low: HIGH = healthy."""
-    if fault_pin.value() == 0:
-        stop_all()
-        sleep_pin.value(0)
+    v = Pin(config.MOTOR_FAULT, Pin.IN, Pin.PULL_UP).value()
+    Pin(config.MOTOR_FAULT, Pin.IN)  # drop the pull-up again
+    if v == 0:
+        release_all()
         raise RuntimeError("nFAULT LOW after '%s' -- overcurrent/overtemp/"
-                           "undervoltage. Motors stopped, drivers asleep." % stage)
+                           "undervoltage. All pins released." % stage)
     print("  fault line OK after: %s" % stage)
 
 
@@ -82,26 +74,32 @@ print("Starting in 3 seconds... Ctrl-C to abort.")
 time.sleep(3)
 
 try:
-    # Stage 1: wake the drivers
-    sleep_pin.value(1)
-    time.sleep_ms(5)                      # DRV8833 wake-up time is ~1 ms
-    check_fault("wake (EEP high, no drive)")
+    release_all()
+    check_fault("baseline (nothing driven)")
 
-    # Stage 2: one motor at a time
-    for label, p in pwms:
-        print("\n>>> %s" % label)
+    # Stage 1: one motor at a time, clean-pin pattern
+    for label, gpio in MOTORS:
+        print("\n>>> GPIO%d: %s" % (gpio, label))
+        p = PWM(Pin(gpio), freq=config.MOTOR_PWM_FREQ, duty_u16=0)
         ramp_to(p, SPIN_DUTY)
         time.sleep_ms(SPIN_MS)
         p.duty_u16(0)
+        p.deinit()
+        Pin(gpio, Pin.IN)
         check_fault(label)
-        time.sleep_ms(800)                # gap so you can tell motors apart
+        time.sleep_ms(GAP_MS)
 
-    # Stage 3: all four together
-    print("\n>>> ALL FOUR at reduced duty (watch for stutter = battery sag)")
-    for _, p in pwms:
+    # Stage 2: all four together
+    print("\n>>> ALL FOUR at reduced duty (watch for stutter = rail sag)")
+    pwms = [PWM(Pin(g), freq=config.MOTOR_PWM_FREQ, duty_u16=0)
+            for g in ALL_PINS]
+    for p in pwms:
         ramp_to(p, ALL_DUTY)
     time.sleep_ms(SPIN_MS)
-    stop_all()
+    for p in pwms:
+        p.duty_u16(0)
+        p.deinit()
+    release_all()
     check_fault("all four together")
 
     print("\nPASS: all stages completed, no faults.")
@@ -110,6 +108,6 @@ try:
     print("map in config.py -- not the wiring.")
 
 finally:
-    stop_all()
-    sleep_pin.value(0)                    # drivers back to sleep
-    print("Cleanup: motors stopped, drivers asleep.")
+    release_all()
+    print("Cleanup: all motor pins released (drivers stay awake -- EEP")
+    print("is hardware-tied high; released inputs = coast, no drive).")

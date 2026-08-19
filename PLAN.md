@@ -68,14 +68,14 @@ and a fault output — fewer discrete parts to get wrong on a drone frame.
 input = drive, low = coast (fast decay). Direction is fixed by wiring
 and was verified per-motor before assembly.
 
-| GPIO | Wire | Module | Motor |
-|------|------|--------|-------|
-| 1 | IN1, DRV8833 #1 (right) | OUT1/2 | M1 front-right, CCW |
-| 2 | IN3, DRV8833 #1 (right) | OUT3/4 | M2 rear-right, CW |
-| 3 | IN3, DRV8833 #2 (left)  | OUT3/4 | M3 rear-left, CCW |
-| 4 | IN1, DRV8833 #2 (left)  | OUT1/2 | M4 front-left, CW |
-| 5 | EEP (nSLEEP), Y-spliced to both modules | — | high = awake; J1 cleared on both |
-| 6 | ULT (nFAULT), Y-spliced to both modules | — | open-drain, low = fault; ESP32 pull-up |
+| GPIO | Wire | Motor (VERIFIED by isolation runs 2026-08-19) |
+|------|------|-----------------------------------------------|
+| 1 | DRV8833 #1 (right) | front-right, CCW |
+| 2 | DRV8833 #1 (right) | rear-right, CW |
+| 3 | DRV8833 #2 (left)  | **front-left**, CW (wiring notes said rear-left — notes were wrong) |
+| 4 | DRV8833 #2 (left)  | **rear-left**, CCW (wiring notes said front-left) |
+| 5 | EEP (nSLEEP), Y-spliced | measured externally held HIGH → drivers always awake. Suspect J1 not cleared or 5/6 wires swapped. **Do not drive as output** until resolved. |
+| 6 | ULT (nFAULT), Y-spliced | open-drain, low = fault; read with ESP32 pull-up |
 
 Motor power: the star point ties to the board's **5V pin**, which is
 the same rail as USB VBUS. The battery will also connect to the 5V pin,
@@ -103,9 +103,20 @@ JTAG_SEL eFuse not burned, DRV8833 input pulldown defines it at boot).
        the board's 5V rail, so motors run on USB. See CLAUDE.md
        Learnings. There is no unpowered "safe" state; every run of
        step6 is live.)
-6. [ ] Confirm each motor's spin DIRECTION matches its label
-       (FR/RL = CCW, RR/FL = CW) — order is verified, direction not
-       yet explicitly confirmed.
+6. [x] Per-pin isolation runs 2026-08-19 (drive ONE GPIO, all other
+       pins released to plain inputs, human calls the corner):
+       GPIO1→front-right ✓, GPIO2→rear-right ✓, GPIO3→**front-left**
+       (map said rear-left), GPIO4→**rear-left** (map said front-left).
+       `config.py` corrected; `step6_motors.py` rewritten to use the
+       clean-pin pattern and to stop driving EEP.
+7. [ ] Hardware checks before next session:
+       - Why is EEP (GPIO5) held high? Verify J1 is really cleared on
+         BOTH modules; check whether the 5/6 wires are swapped.
+       - Sleep control matters for flight (coast-safe boot); until
+         fixed, drivers are always awake and only the IN pins gate
+         the motors.
+8. [ ] Confirm spin DIRECTIONS by eye during the next full step6 run
+       (FR/RL = CCW, RR/FL = CW).
 
 **Next after motors pass:** flash ESP-Drone (ESP-IDF/C) — replaces
 MicroPython entirely; set a unique AP SSID per drone before building.

@@ -29,23 +29,26 @@ LED_IS_NEOPIXEL = True      # WS2812 -- must be True on this board
 # Each motor's second input (IN2/IN4) is jumpered to GND on the module,
 # so one GPIO per motor: PWM high = drive, low = coast (fast decay).
 # Direction is fixed by wiring -- verified per-motor before assembly.
-# Wired 2026-08-18:
-#   DRV8833 #1 (right):  IN1=GPIO1 -> M1 front-right (CCW)
-#                        IN3=GPIO2 -> M2 rear-right  (CW)
-#   DRV8833 #2 (left):   IN1=GPIO4 -> M4 front-left  (CW)
-#                        IN3=GPIO3 -> M3 rear-left   (CCW)
+# VERIFIED by per-pin isolation runs 2026-08-19 (drive one GPIO alone,
+# watch which corner spins). The left side is SWAPPED vs the original
+# wiring notes: GPIO3 is FRONT-left, GPIO4 is REAR-left.
+#   DRV8833 #1 (right): GPIO1 -> front-right (CCW), GPIO2 -> rear-right (CW)
+#   DRV8833 #2 (left):  GPIO3 -> front-left  (CW),  GPIO4 -> rear-left  (CCW)
 # GPIO 3 is a strapping pin (JTAG source select) -- harmless here: only
 # sampled at reset, only meaningful if the JTAG_SEL eFuse is burned
 # (it isn't), and the DRV8833 input pulldown keeps it defined at boot.
-MOTOR_FR = 1                # M1, spins CCW
-MOTOR_RR = 2                # M2, spins CW
-MOTOR_RL = 3                # M3, spins CCW
-MOTOR_FL = 4                # M4, spins CW
+MOTOR_FR = 1                # spins CCW
+MOTOR_RR = 2                # spins CW
+MOTOR_FL = 3                # spins CW
+MOTOR_RL = 4                # spins CCW
 
 # EEP (nSLEEP) -- one wire Y-spliced to both modules. HIGH = awake.
-# Internal pulldown in the DRV8833 keeps both drivers asleep at boot,
-# so motors cannot twitch until we deliberately raise this pin.
-# J1 must be cleared on both modules or this pin does nothing.
+# MEASURED 2026-08-19: this line is externally held HIGH (beats the
+# ESP32's internal pulldown), so the drivers are ALWAYS AWAKE -- most
+# likely J1 is not actually cleared, or the 5/6 wires are swapped.
+# Until that's resolved in hardware, do NOT drive this pin as an
+# output: forcing a VCC-tied line low stresses the ESP32 pin and can
+# dip the rail into UVLO (seen as a phantom nFAULT).
 MOTOR_SLEEP = 5
 
 # ULT (nFAULT) -- one wire Y-spliced to both modules. Open-drain,
