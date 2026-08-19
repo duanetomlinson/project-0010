@@ -124,3 +124,42 @@ JTAG_SEL eFuse not burned, DRV8833 input pulldown defines it at boot).
 
 **Next after motors pass:** flash ESP-Drone (ESP-IDF/C) — replaces
 MicroPython entirely; set a unique AP SSID per drone before building.
+
+## ESP-Drone compatibility assessment — 2026-08-19
+
+Verified against espressif/esp-drone master. Verdict: **compatible, but
+NOT flashable as-is** — stock defaults would PWM the EEP/ULT lines as
+motors. All fixes are menuconfig-only.
+
+What matches out of the box:
+- ESP32-S3 is a supported target (`sdkconfig.defaults.esp32s3`; the
+  hardware-version choice auto-selects TARGET_ESP32_S2_DRONE_V1_2).
+- Corner/direction convention is IDENTICAL to our build
+  (docs/_static/motors_direction.png): M1=front-right CCW,
+  M2=rear-right CW, M3=rear-left CCW, M4=front-left CW.
+- Brushed drive = one active-high LEDC PWM per motor — our
+  single-input DRV8833 wiring is drop-in compatible. No sleep-pin
+  concept in the firmware, so the stuck-high EEP is actually fine.
+- BMP280 is simply unsupported (only MS5611, disabled by default) —
+  it gets ignored; stock esp-drone flies on MPU6050 alone.
+
+Required menuconfig changes (ESPDrone Config):
+| Setting | Default (S2/S3 target) | Ours |
+|---------|------------------------|------|
+| MOTOR01_PIN (M1 front-right) | 5 (= our EEP!) | **1** |
+| MOTOR02_PIN (M2 rear-right)  | 6 (= our ULT!) | **2** |
+| MOTOR03_PIN (M3 rear-left)   | 3 | **4** |
+| MOTOR04_PIN (M4 front-left)  | 4 | **3** |
+| I2C0_PIN_SDA | 11 | **10** |
+| I2C0_PIN_SCL | 10 | **9** |
+| MPU_PIN_INT  | 12 | free GPIO, see below |
+
+Hard blocker found: **the MPU6050 INT pin is mandatory** — the sensor
+task blocks on a semaphore given only by the rising-edge ISR on
+CONFIG_MPU_PIN_INT (sensors_mpu6050_hm5883L_ms5611.c:629-668). The
+GY-521's INT pin is currently unwired. Wire GY-521 INT → a free GPIO
+(7 or 8) and set MPU_PIN_INT to match, or the stabilizer never runs.
+
+Minor / cosmetic: battery-voltage ADC not wired (battery warnings
+bogus), buzzer/LED pin defaults don't match this board (disable or
+ignore), set a unique WIFI_BASE_SSID.
