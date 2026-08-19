@@ -172,6 +172,29 @@ Setup done 2026-08-19: espressif/esp-drone cloned into `esp-drone/`
 repo root. Build: `cd esp-drone && idf.py set-target esp32s3 &&
 idf.py build` (delete any stale `sdkconfig` first so defaults apply).
 
+### FLASHED AND BOOTING — 2026-08-19
+
+ESP-Drone built (IDF v5.0 + Python 3.11) and flashed to the board.
+Verified boot log over USB-Serial/JTAG console: MPU6050 [OK], MPU INT
+active on GPIO 7, LEDs relocated to 8/11/12 (defaults 7/9 collided
+with INT/SCL), AP up as `ESPFLY-0010_3C0F02E4DD19` (pw 12345678, UDP
+2390), `selftestPassed = 1`. Optional deck sensors (VL53L1X, PMW3901)
+absent → expected FAILs. Build fixes recorded in
+`espdrone-overrides.sdkconfig`; hard-won gotchas in CLAUDE.md
+Learnings (software resets park the S3 in download mode — use the
+RESET button or USB replug; sensor FAIL after button reset → USB
+power cycle).
+
+Next (flight bring-up):
+1. [ ] Connect with cfclient or the ESP-Drone app (join the AP —
+       drops that machine's internet while connected) and verify
+       M1-M4 respond per corner in Flight Control — PROPS OFF.
+2. [ ] Resolve EEP/ULT 5-6 wire question (GPIO 5 sees ~5 V through
+       the suspected nFAULT pull-up) — disconnect both wires from
+       GPIO 5/6, or re-trace; esp-drone uses neither pin.
+3. [ ] Level calibration on a flat surface, then props on (FR/RL
+       CCW props, RR/FL CW props) and first tethered hover.
+
 Minor / cosmetic: battery-voltage ADC not wired (battery warnings
 bogus), buzzer/LED pin defaults don't match this board (disable or
 ignore), set a unique WIFI_BASE_SSID.

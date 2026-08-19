@@ -7,6 +7,14 @@ decision record; tests are `stepN_*.py`, run via `import stepN_...`.
 
 ## Learnings
 
+### 2026-08-19 · ESP-Drone flash gotchas: dependency drift, LED pin collisions, I2C lockup, fake software resets · Claude Fable 5, session 01EBGTBFkoL9KmkfpZZXKsc1
+
+**What I did:** Flashed esp-drone on IDF v5.0 assuming stock defaults + our pin overrides were the whole configuration surface.
+**What went wrong:** Four separate traps: (1) `espressif/esp-now: "*"` resolved to 2.5.3, which needs FreeRTOS symbols IDF v5.0 lacks; (2) the target's default status-LED pins (7/9/8) silently collide with our MPU INT and I2C SCL; (3) every esptool/monitor software reset over USB-Serial/JTAG parked the S3 in DOWNLOAD mode, so "no AP" really meant "app never ran"; (4) a button reset mid-I2C left the MPU6050 holding the bus — only a USB power cycle clears it.
+**Root cause:** Unpinned registry dependencies and per-target pin defaults are invisible until a build/boot log is read line by line; USB-JTAG DTR/RTS reset emulation is not a normal reset.
+**Rule to follow:** After flashing this board, verify boot via serial log (USB console), not via absence/presence of WiFi; on sensor FAIL, power-cycle USB before debugging; when a boot log shows `gpio:` claims, check every claimed pin against config.py's map.
+**Where it applies:** esp-drone/ builds, espdrone-overrides.sdkconfig, any future ESP-IDF firmware on the S3-Zero.
+
 ### 2026-08-19 · Verify each motor corner by single-pin isolation — wiring notes lie, and dirty pin state ruins the test · Claude Fable 5, session 01EBGTBFkoL9KmkfpZZXKsc1
 
 **What I did:** Trusted the user's detailed wiring notes for the GPIO→corner map, and ran motor tests with scaffolding that held multiple PWM channels and drove EEP/read nFAULT every run.
