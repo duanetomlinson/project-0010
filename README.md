@@ -182,8 +182,9 @@ decision record live in `PLAN.md`; pins live in `config.py`.
   GPIO 1 = front-right, 2 = rear-right, 3 = rear-left, 4 = front-left
 - EEP (nSLEEP) on GPIO 5, ULT (nFAULT) on GPIO 6 — each one wire
   Y-spliced to both modules. J1 cleared on both or EEP does nothing.
-- Motor VCC/GND from the battery at the star point — **USB alone will
-  not spin motors**
+- Motor VCC/GND at the star point, fed by both the battery and the
+  board's 5V rail — **motors spin on USB power alone** (verified live
+  2026-08-18), so every test run is live
 - Test with `import step6_motors` — **props off**. Verifies each
   motor's position and direction at low PWM, then all four together.
 - Flash ESP-Drone (ESP-IDF/C) — this **replaces** MicroPython entirely

@@ -89,14 +89,16 @@ JTAG_SEL eFuse not burned, DRV8833 input pulldown defines it at boot).
 3. [x] Create this plan log; fix README's obsolete MOSFET section.
 4. [x] Commit; push `config.py` + `step6_motors.py` to the board via
        mpremote.
-5. [x] USB-only dry run 2026-08-18: full sequence ran end-to-end on
-       the board (wake, 4x per-motor, all-four, cleanup), no crashes,
-       no faults. Drivers were unpowered (no battery), so this proves
-       software + PWM/EEP/ULT setup only — motors did not spin, and
-       the nFAULT "OK" readings are not meaningful without motor VCC.
-6. [ ] Battery run — **props off** — human confirms each motor's
-       position and direction matches the printed labels.
-7. [ ] Record battery-run outcome here (pass / pin-map corrections).
+5. [x] Live run on USB, 2026-08-18: full sequence completed — wake,
+       all four motors spun one at a time IN THE LABELED ORDER, all
+       four together, no faults, clean shutdown. (First logged as an
+       "unpowered dry run" — wrong: the star's VCC is also fed from
+       the board's 5V rail, so motors run on USB. See CLAUDE.md
+       Learnings. There is no unpowered "safe" state; every run of
+       step6 is live.)
+6. [ ] Confirm each motor's spin DIRECTION matches its label
+       (FR/RL = CCW, RR/FL = CW) — order is verified, direction not
+       yet explicitly confirmed.
 
 **Next after motors pass:** flash ESP-Drone (ESP-IDF/C) — replaces
 MicroPython entirely; set a unique AP SSID per drone before building.

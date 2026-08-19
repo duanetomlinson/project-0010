@@ -6,8 +6,10 @@ PROPS OFF. This test spins motors. Do not run with propellers mounted.
 Hardware under test: 2x DRV8833 modules, one GPIO per motor (the second
 input of each channel is jumpered to GND on the module, so PWM on IN1
 drives forward, low coasts). EEP (nSLEEP) and ULT (nFAULT) are each one
-wire Y-spliced to both modules. Motor power comes from the battery at
-the star point -- USB alone will NOT spin motors.
+wire Y-spliced to both modules. Motor power comes from the star point,
+which is fed by BOTH the battery and the board's 5V rail -- verified
+live 2026-08-18: motors DO spin on USB power alone. There is no safe
+"dry run" power state; treat every run as live.
 
 What this proves, in order:
   1. WAKE    -- EEP high wakes both drivers, nFAULT reads healthy.
@@ -74,7 +76,7 @@ def ramp_to(p, duty):
 
 print("=" * 52)
 print("DRV8833 MOTOR BRING-UP  --  PROPS MUST BE OFF")
-print("Battery must be connected (motors don't run on USB).")
+print("Motors spin on USB power too -- every run is LIVE.")
 print("=" * 52)
 print("Starting in 3 seconds... Ctrl-C to abort.")
 time.sleep(3)
