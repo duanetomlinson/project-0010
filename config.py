@@ -8,8 +8,9 @@ Board: Waveshare ESP32-S3-Zero (ESP32-S3FH4R2, 4MB flash / 2MB PSRAM)
 
 # ---- I2C bus ----
 # On the S3 these are software-assigned, not fixed.
-# Chosen to match the eventual drone pin map (motors will take 4-7).
-I2C_SDA = 8
+# Verified by pull-up sweep + scan 2026-08-16: sensors are physically
+# wired SDA->GPIO10, SCL->GPIO9 (not 8/9 as originally planned).
+I2C_SDA = 10
 I2C_SCL = 9
 I2C_FREQ = 400_000          # drop to 100_000 if the bus is flaky
 I2C_ID   = 0                # hardware I2C peripheral 0
@@ -23,6 +24,38 @@ BMP280_ADDR  = 0x76         # 0x77 if SDO is tied high
 # Set LED_PIN to None to skip the blink test entirely.
 LED_PIN = 21
 LED_IS_NEOPIXEL = True      # WS2812 -- must be True on this board
+
+# ---- Motor drive: 2x DRV8833 modules, one IN pin per motor ----
+# Each motor's second input (IN2/IN4) is jumpered to GND on the module,
+# so one GPIO per motor: PWM high = drive, low = coast (fast decay).
+# Direction is fixed by wiring -- verified per-motor before assembly.
+# Wired 2026-08-18:
+#   DRV8833 #1 (right):  IN1=GPIO1 -> M1 front-right (CCW)
+#                        IN3=GPIO2 -> M2 rear-right  (CW)
+#   DRV8833 #2 (left):   IN1=GPIO4 -> M4 front-left  (CW)
+#                        IN3=GPIO3 -> M3 rear-left   (CCW)
+# GPIO 3 is a strapping pin (JTAG source select) -- harmless here: only
+# sampled at reset, only meaningful if the JTAG_SEL eFuse is burned
+# (it isn't), and the DRV8833 input pulldown keeps it defined at boot.
+MOTOR_FR = 1                # M1, spins CCW
+MOTOR_RR = 2                # M2, spins CW
+MOTOR_RL = 3                # M3, spins CCW
+MOTOR_FL = 4                # M4, spins CW
+
+# EEP (nSLEEP) -- one wire Y-spliced to both modules. HIGH = awake.
+# Internal pulldown in the DRV8833 keeps both drivers asleep at boot,
+# so motors cannot twitch until we deliberately raise this pin.
+# J1 must be cleared on both modules or this pin does nothing.
+MOTOR_SLEEP = 5
+
+# ULT (nFAULT) -- one wire Y-spliced to both modules. Open-drain,
+# active LOW (overcurrent / overtemp / undervoltage). Needs the ESP32's
+# internal pull-up; HIGH = healthy.
+MOTOR_FAULT = 6
+
+# PWM: LEDC hardware, one channel per motor. 20 kHz is above audible
+# whine and well within the DRV8833's switching range.
+MOTOR_PWM_FREQ = 20_000
 
 # ---- Sea-level pressure, for altitude math ----
 # 1013.25 hPa is the standard default. For accurate absolute altitude,
@@ -39,5 +72,5 @@ SEA_LEVEL_HPA = 1013.25
 # GPIO 33-37   NOT broken out on this board (reserved for octal PSRAM)
 # GPIO 43,44   UART0 TX/RX (the TX/RX silkscreen pads)
 #
-# 24 GPIOs are broken out. 4-9 are all free and safe, so the drone
-# pin map (motors 4-7, I2C 8-9) fits this board with nothing to change.
+# 24 GPIOs are broken out. Current pin map: motors 1-4, EEP 5, ULT 6,
+# I2C on 9/10. GPIO 3 caveat is documented at the motor section above.

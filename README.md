@@ -17,9 +17,13 @@ distinguished by address, not by wiring.
 |----------|-------------------|----------|
 | 3V3      | VCC               | VCC/VIN  |
 | GND      | GND               | GND      |
-| GPIO 8   | SDA               | SDA/SDI  |
+| GPIO 10  | SDA               | SDA/SDI  |
 | GPIO 9   | SCL               | SCL/SCK  |
 | —        | AD0 → GND         | SDO → GND |
+
+(Originally planned as SDA on GPIO 8; verified by pull-up sweep + scan
+2026-08-16 that the sensors are physically on GPIO 10. `config.py` is
+the source of truth.)
 
 Expected addresses: **MPU-6050 at 0x68**, **BMP280 at 0x76**.
 (Tie AD0/SDO high instead and they become 0x69 / 0x77.)
@@ -120,6 +124,7 @@ boot, so leaving a test loop in it means fighting the board for the REPL.
 | `step3_imu.py` | test | Gyro calibration, live stream, six-orientation test. |
 | `step4_baro.py` | test | Chip ID, noise check, 1m lift test. |
 | `step5_combined.py` | test | Both sensors, one loop, rate benchmark. |
+| `step6_motors.py` | test | **PROPS OFF.** DRV8833 wake, per-motor spin, all-four load, fault monitor. |
 | `main.py` | boot | All commented out on purpose. |
 
 ---
@@ -166,13 +171,20 @@ sit still and level while it does.
 
 ---
 
-## Next session
+## Session 2 — Motor drive (2× DRV8833)
 
-- Motor drive stage: 4× SI2302 N-channel MOSFETs
-  (motor+ → battery+, motor− → drain, source → battery GND,
-  gate → ~100 Ω → GPIO, 10 kΩ pulldown gate→GND, flyback diode across motor)
-- **One common ground**: battery GND, all MOSFET sources, ESP32 GND
-- Motors on GPIO 4, 5, 6, 7 (LEDC-capable)
-- Verify each motor's position and direction at low PWM **before** props
+The discrete-MOSFET stage originally planned here was dropped in favor
+of two DRV8833 dual H-bridge modules (integrated current limit, thermal
+and undervoltage protection, fault output). Full wiring map and
+decision record live in `PLAN.md`; pins live in `config.py`.
+
+- One GPIO per motor (IN2/IN4 jumpered to GND on each module):
+  GPIO 1 = front-right, 2 = rear-right, 3 = rear-left, 4 = front-left
+- EEP (nSLEEP) on GPIO 5, ULT (nFAULT) on GPIO 6 — each one wire
+  Y-spliced to both modules. J1 cleared on both or EEP does nothing.
+- Motor VCC/GND from the battery at the star point — **USB alone will
+  not spin motors**
+- Test with `import step6_motors` — **props off**. Verifies each
+  motor's position and direction at low PWM, then all four together.
 - Flash ESP-Drone (ESP-IDF/C) — this **replaces** MicroPython entirely
 - Set a unique AP SSID per drone in the WiFi config before building
