@@ -44,4 +44,13 @@ CONFIG_WIFI_BASE_SSID="ESPFLY-0010"
 # would toggle them mid-flight. Parked on free pins instead.
 CONFIG_LED_PIN_BLUE=11
 CONFIG_LED_PIN_GREEN=12
-CONFIG_LED_PIN_RED=8
+CONFIG_LED_PIN_RED=13
+
+# Battery-voltage ADC: default GPIO2 = our rear-right motor pin --
+# putting it in analog mode disconnects that motor's PWM (found live:
+# right-side motors dead under app control). Moved to GPIO 8, the only
+# free ADC1-capable pin. NOTE: also requires the code patch in
+# esp-drone/components/drivers/general/adc/adc_esp32.c -- the S2/S3
+# channel is hardcoded ADC_CHANNEL_1 (GPIO2); change to ADC_CHANNEL_7
+# (GPIO8). Nothing is wired to GPIO 8, so battery readings are noise.
+CONFIG_ADC1_PIN=8

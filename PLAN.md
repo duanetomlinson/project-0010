@@ -185,14 +185,32 @@ Learnings (software resets park the S3 in download mode — use the
 RESET button or USB replug; sensor FAIL after button reset → USB
 power cycle).
 
+### App control verified — 2026-08-19 (second session)
+
+Found and fixed a fourth pin collision: the battery-voltage ADC
+defaults to GPIO2 (ADC1_CH1) = our rear-right motor — analog mode
+disconnects the PWM, so the right side looked dead under app control.
+Moved to GPIO 8 (CONFIG_ADC1_PIN=8 + hardcoded-channel patch in
+adc_esp32.c, see espdrone-overrides.sdkconfig); red LED moved 8→13.
+After the fix all four motors respond from the app. Uneven motor
+distribution on the bench (CW pair at initial thrust, CCW pair only
+with yaw input) is restrained-quad physics — yaw-integrator wind-up
+plus a non-level jig — not a fault.
+
+Gyro calibration timing: ~90 s warm, 4-5 min from cold (MPU6050
+warm-up drift). Drone must sit untouched until "Ready to fly".
+
 Next (flight bring-up):
-1. [ ] Connect with cfclient or the ESP-Drone app (join the AP —
-       drops that machine's internet while connected) and verify
-       M1-M4 respond per corner in Flight Control — PROPS OFF.
-2. [ ] Resolve EEP/ULT 5-6 wire question (GPIO 5 sees ~5 V through
+1. [ ] Tape the jig flat and re-verify even four-motor spin-up at
+       level attitude — PROPS OFF.
+2. [ ] Battery power: add a boost converter (charge module → steady
+       5 V into the 5 V pin). The onboard LDO browns out on 1S under
+       WiFi + motor load (AP never appears on battery). NEVER boost
+       and USB at the same time.
+3. [ ] Resolve EEP/ULT 5-6 wire question (GPIO 5 sees ~5 V through
        the suspected nFAULT pull-up) — disconnect both wires from
        GPIO 5/6, or re-trace; esp-drone uses neither pin.
-3. [ ] Level calibration on a flat surface, then props on (FR/RL
+4. [ ] Level calibration on a flat surface, then props on (FR/RL
        CCW props, RR/FL CW props) and first tethered hover.
 
 Minor / cosmetic: battery-voltage ADC not wired (battery warnings
