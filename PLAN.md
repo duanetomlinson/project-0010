@@ -110,8 +110,12 @@ JTAG_SEL eFuse not burned, DRV8833 input pulldown defines it at boot).
        `config.py` corrected; `step6_motors.py` rewritten to use the
        clean-pin pattern and to stop driving EEP.
 7. [ ] Hardware checks before next session:
-       - Why is EEP (GPIO5) held high? Verify J1 is really cleared on
-         BOTH modules; check whether the 5/6 wires are swapped.
+       - Why is EEP (GPIO5) held high? J1 confirmed NOT soldered on
+         either module (checked 2026-08-19), so the leading suspect is
+         the 5/6 wires being swapped: these modules typically have a
+         10k pull-up to VCC on ULT (nFAULT), which would present as a
+         stuck-high line — and would also mean GPIO5 sees ~5V through
+         10k. Trace both wires at the modules.
        - Sleep control matters for flight (coast-safe boot); until
          fixed, drivers are always awake and only the IN pins gate
          the motors.
