@@ -77,8 +77,15 @@ and was verified per-motor before assembly.
 | 5 | EEP (nSLEEP), Y-spliced to both modules | — | high = awake; J1 cleared on both |
 | 6 | ULT (nFAULT), Y-spliced to both modules | — | open-drain, low = fault; ESP32 pull-up |
 
-Motor power: battery + / − at the star point. USB alone will not spin
-motors. GPIO 3 is a strapping pin but safe here (sampled only at reset,
+Motor power: the star point ties to the board's **5V pin**, which is
+the same rail as USB VBUS. The battery will also connect to the 5V pin,
+so either source (USB or battery) powers the motors — every run of
+step6 is live. **CAUTION, unverified:** if the S3-Zero has no diode
+between USB VBUS and the 5V pin, plugging in USB with the battery
+attached parallels the two sources — USB would push uncontrolled
+charge current into the battery. Check the Waveshare S3-Zero schematic
+(or measure) before ever having battery + USB connected at the same
+time. GPIO 3 is a strapping pin but safe here (sampled only at reset,
 JTAG_SEL eFuse not burned, DRV8833 input pulldown defines it at boot).
 
 **Plan of execution:**
