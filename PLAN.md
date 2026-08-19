@@ -200,13 +200,17 @@ plus a non-level jig — not a fault.
 Gyro calibration timing: ~90 s warm, 4-5 min from cold (MPU6050
 warm-up drift). Drone must sit untouched until "Ready to fly".
 
-Next (flight bring-up):
-1. [ ] Tape the jig flat and re-verify even four-motor spin-up at
+Next (flight bring-up) — **POWER IS THE CURRENT FOCUS**:
+1. [ ] Power testing: add a boost converter (charge module → steady
+       5 V into the 5 V pin) and verify boot + AP + motor load on
+       battery. The onboard LDO browns out on 1S under WiFi + motor
+       load (AP never appears on battery). NEVER boost and USB at
+       the same time. Likely needs a cleaner physical build — the
+       charge module + boost + DRV8833s are small modules that need
+       a tidier mounting to fit the frame (consider a mounting
+       plate/enclosure; freecad if we design one).
+2. [ ] Tape the jig flat and re-verify even four-motor spin-up at
        level attitude — PROPS OFF.
-2. [ ] Battery power: add a boost converter (charge module → steady
-       5 V into the 5 V pin). The onboard LDO browns out on 1S under
-       WiFi + motor load (AP never appears on battery). NEVER boost
-       and USB at the same time.
 3. [ ] Resolve EEP/ULT 5-6 wire question (GPIO 5 sees ~5 V through
        the suspected nFAULT pull-up) — disconnect both wires from
        GPIO 5/6, or re-trace; esp-drone uses neither pin.
