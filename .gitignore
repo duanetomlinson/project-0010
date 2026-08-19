@@ -21,3 +21,7 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+# Vendor checkout of espressif/esp-drone (own git repo; our overrides
+# live in espdrone-overrides.sdkconfig at the repo root)
+esp-drone/

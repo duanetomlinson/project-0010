@@ -152,13 +152,20 @@ Required menuconfig changes (ESPDrone Config):
 | MOTOR04_PIN (M4 front-left)  | 4 | **3** |
 | I2C0_PIN_SDA | 11 | **10** |
 | I2C0_PIN_SCL | 10 | **9** |
-| MPU_PIN_INT  | 12 | free GPIO, see below |
+| MPU_PIN_INT  | 12 | **7** (GY-521 INT soldered to GPIO 7, 2026-08-19) |
 
 Hard blocker found: **the MPU6050 INT pin is mandatory** — the sensor
 task blocks on a semaphore given only by the rising-edge ISR on
-CONFIG_MPU_PIN_INT (sensors_mpu6050_hm5883L_ms5611.c:629-668). The
-GY-521's INT pin is currently unwired. Wire GY-521 INT → a free GPIO
-(7 or 8) and set MPU_PIN_INT to match, or the stabilizer never runs.
+CONFIG_MPU_PIN_INT (sensors_mpu6050_hm5883L_ms5611.c:629-668).
+Resolution: GY-521 INT soldered to **GPIO 7** (2026-08-19), and
+CONFIG_MPU_PIN_INT=7 set in the overrides.
+
+Setup done 2026-08-19: espressif/esp-drone cloned into `esp-drone/`
+(git-ignored vendor checkout). All overrides above are appended to
+`esp-drone/sdkconfig.defaults.esp32s3` and kept as a tracked copy in
+`espdrone-overrides.sdkconfig` (with re-apply instructions) at the
+repo root. Build: `cd esp-drone && idf.py set-target esp32s3 &&
+idf.py build` (delete any stale `sdkconfig` first so defaults apply).
 
 Minor / cosmetic: battery-voltage ADC not wired (battery warnings
 bogus), buzzer/LED pin defaults don't match this board (disable or

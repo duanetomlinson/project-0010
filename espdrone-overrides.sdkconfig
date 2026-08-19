@@ -1,0 +1,27 @@
+# ESP-FLY project-0010 board overrides for esp-drone
+# Board: Waveshare ESP32-S3-Zero + 2x DRV8833 (single-input drive)
+#
+# Applied by appending to esp-drone/sdkconfig.defaults.esp32s3.
+# If esp-drone/ is re-cloned, re-append this file:
+#   cat espdrone-overrides.sdkconfig >> esp-drone/sdkconfig.defaults.esp32s3
+# (defaults only take effect on a fresh build: delete esp-drone/sdkconfig
+# first if it exists, then idf.py set-target esp32s3 && idf.py build)
+#
+# Motor map VERIFIED by per-pin isolation runs 2026-08-19.
+# ESP-Drone motor numbering (Crazyflie convention):
+#   M1=front-right CCW, M2=rear-right CW, M3=rear-left CCW, M4=front-left CW
+CONFIG_MOTOR01_PIN=1
+CONFIG_MOTOR02_PIN=2
+CONFIG_MOTOR03_PIN=4
+CONFIG_MOTOR04_PIN=3
+
+# I2C0: MPU6050 (0x68) + BMP280 (0x76, ignored by esp-drone)
+CONFIG_I2C0_PIN_SDA=10
+CONFIG_I2C0_PIN_SCL=9
+
+# MPU6050 data-ready interrupt -- GY-521 INT pin soldered to GPIO 7.
+# MANDATORY: the sensor task blocks until this ISR fires.
+CONFIG_MPU_PIN_INT=7
+
+# Unique AP SSID per drone (final SSID gets -MAC appended)
+CONFIG_WIFI_BASE_SSID="ESPFLY-0010"

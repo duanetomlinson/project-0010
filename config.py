@@ -60,6 +60,12 @@ MOTOR_FAULT = 6
 # whine and well within the DRV8833's switching range.
 MOTOR_PWM_FREQ = 20_000
 
+# ---- MPU6050 data-ready interrupt ----
+# GY-521 INT pin soldered to GPIO 7 (2026-08-19). Required by
+# ESP-Drone: its sensor task blocks until the INT rising-edge ISR
+# fires. Unused by the MicroPython test steps (they poll over I2C).
+MPU_INT = 7
+
 # ---- Sea-level pressure, for altitude math ----
 # 1013.25 hPa is the standard default. For accurate absolute altitude,
 # look up your local QNH. For *relative* altitude (what we care about
@@ -76,4 +82,4 @@ SEA_LEVEL_HPA = 1013.25
 # GPIO 43,44   UART0 TX/RX (the TX/RX silkscreen pads)
 #
 # 24 GPIOs are broken out. Current pin map: motors 1-4, EEP 5, ULT 6,
-# I2C on 9/10. GPIO 3 caveat is documented at the motor section above.
+# MPU INT 7, I2C on 9/10. GPIO 3 caveat is at the motor section above.
