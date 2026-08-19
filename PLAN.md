@@ -158,7 +158,12 @@ Hard blocker found: **the MPU6050 INT pin is mandatory** — the sensor
 task blocks on a semaphore given only by the rising-edge ISR on
 CONFIG_MPU_PIN_INT (sensors_mpu6050_hm5883L_ms5611.c:629-668).
 Resolution: GY-521 INT soldered to **GPIO 7** (2026-08-19), and
-CONFIG_MPU_PIN_INT=7 set in the overrides.
+CONFIG_MPU_PIN_INT=7 set in the overrides. **VERIFIED live**: GPIO 7
+reads 0 at rest; with DATA_RDY enabled at 100 Hz, 101 rising edges
+counted in 1 s. I2C scan still shows 0x68 + 0x76 post-solder.
+
+Build environment: esp-drone requires **ESP-IDF release/v5.0** (per
+its README). Not yet installed on this machine (`idf.py` not on PATH).
 
 Setup done 2026-08-19: espressif/esp-drone cloned into `esp-drone/`
 (git-ignored vendor checkout). All overrides above are appended to
