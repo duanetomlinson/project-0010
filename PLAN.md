@@ -23,6 +23,8 @@ from git archaeology.
 | `step6_motors.py` | test | config, status_led | Per-motor spin, all-four load, nFAULT monitor, status LED. EEP wake only when `MOTOR_SLEEP_DRIVE=True`. |
 | `main.py` | boot | — | All commented out on purpose. |
 | `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
+| `espdrone-overrides.sdkconfig` | config | — | Tracked copy of the Kconfig values appended to `esp-drone/sdkconfig.defaults.esp32s3` (pins, SSID, LED, IMU mount, bench print). Every pin the firmware uses is a `CONFIG_*` symbol here. |
+| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c`: setters write `state[]` + notify, a `ws2812Task` owns every RMT call; plus the led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, IMU mount remap (`choice IMU_MOUNT` + body-frame negations in the MPU-6050 driver), 1 Hz `ATTITUDE_BENCH_PRINT` line in `stabilizer.c`, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe and the `espfly-0010` commit list. |
 
 ### step6_motors.py logic
 
@@ -304,8 +306,291 @@ driving GPIO6 as an output.
 6. [ ] Bench: trace ULT/EEP at both modules; confirm GPIO5 reads HIGH
        via nFAULT pull-up and GPIO6 is nSLEEP. Then decide whether to
        set MOTOR_SLEEP_DRIVE=True.
-7. [ ] Re-sync `espdrone-overrides.sdkconfig` (MPU_PIN_INT 7 → 13) and
-       re-verify the INT edge count on GPIO 13 — separate pass.
+7. [x] Re-sync `espdrone-overrides.sdkconfig` (MPU_PIN_INT 7 → 13) —
+       done in Session 5. Bench re-verify of the INT edge count on
+       GPIO 13 is tracked there.
 8. [ ] Push `config.py`, `status_led.py`, `step6_motors.py`,
        `step1_hello.py` to the board via mpremote; run step1 (LED
        blink) and step6 (props off) and watch the status LED.
+
+## Session 5 — 2026-09-11 — ESP-Drone firmware onto the as-built map + WS2812 status LED
+
+**Trigger:** Session 4 moved the MicroPython side to the as-built map
+(MPU INT on GPIO 13, WS2812 on GPIO 21 as the only LED). The ESP-Drone
+build still carried INT=7 and three "parked" discrete-LED pins, one of
+which (RED=13) now collided with MPU INT. Every pin the firmware touches
+must be a Kconfig symbol, and the vendor-tree changes must be recoverable
+(the `esp-drone/` checkout is git-ignored).
+
+**Pin map used (authoritative, unchanged unless noted):**
+
+| Signal | GPIO | Kconfig symbol |
+|--------|------|----------------|
+| M1 front-right / M2 rear-right / M3 rear-left / M4 front-left | 1 / 2 / 4 / 3 | `MOTOR01..04_PIN` |
+| I2C SDA / SCL | 10 / 9 | `I2C0_PIN_SDA` / `I2C0_PIN_SCL` |
+| MPU-6050 INT | **13** (was 7) | `MPU_PIN_INT` |
+| Battery ADC (nothing wired) | 8 | `ADC1_PIN` + `adc_esp32.c` channel patch |
+| WS2812 status LED | 21 | **`LED_PIN_WS2812`** (new) |
+| DRV8833 nFAULT / nSLEEP | 5 / 6 | none — firmware never touches them |
+
+**Decisions:**
+- `led_esp32.c` is rewritten as a WS2812 backend over the IDF v5.0 RMT
+  TX driver (`led_strip_encoder.c/.h` copied from the IDF `rmt/led_strip`
+  example). `led.h` is untouched, so `ledseq.c`, `system.c`, `cfassert.c`
+  compile as-is. The three logical LEDs are on/off bits mixed into one
+  GRB pixel at brightness 32/255: BLUE = system / link down, GREEN =
+  link up, RED = charge / low battery / assert.
+- `ledSet` never blocks and never touches the RMT driver: it writes
+  `state[]` and `xTaskNotifyGive`s a dedicated `ws2812Task` (3072 B
+  stack, prio 1) that owns every RMT call and blocks until the previous
+  ~80 µs frame has left the wire before sending the next. A burst of
+  `ledSet` calls collapses into one frame. (The first backend polled
+  `rmt_tx_wait_all_done(chan, 0)` inline from `ledSet`; that overflowed
+  the 2 KB LEDSEQCMD task — see "Reboot loop + fix" below.)
+  `cfassert.c` calls `ledSet` after `portDISABLE_INTERRUPTS()`: the
+  notify is harmless there, but the task cannot run, so the frame may
+  never reach the LED; the console "Assert failed" line is the real
+  signal. Documented in the `led_esp32.c` file header; `led.h` untouched.
+- `CONFIG_LED_PIN_BLUE/GREEN/RED` are kept as symbols (upstream Kconfig)
+  but pinned to 21 in the overrides so the generated `sdkconfig` shows no
+  phantom claims on 7/9/8; the backend does not read them.
+- The vendor tree gets a local branch `espfly-0010` (from upstream
+  `db0f656`) with everything committed — `491309e` build fixes,
+  `2fe79cf` pin map + first WS2812 backend, `032d336` LED task fix — and
+  the tracked delta lives in `patches/esp-drone-espfly.patch`
+  (`git diff db0f656..032d336`, esp-now vendor copy excluded — it is
+  re-vendored, not patched).
+
+**LED path:**
+
+```
+ ledseq.c timer cb        system.c           cfassert.c (IRQs off)
+      |                      |                       |
+      +---------- ledSet(led, on) / ledClearAll / ledSetAll ----------+
+                             |
+                             v
+                   state[3]  {BLUE, RED, GREEN}      (led_esp32.c: a store, nothing else
+                             |                        on the caller's stack)
+                             v
+                   xTaskNotifyGive(ws2812Task)       (a burst of calls = one notification)
+                             |
+   - - - - - - - - - - - - - | - - - - - - - - - - - - - - -  task boundary
+                             v
+                   ws2812Task  (3072 B stack, prio 1, owns every RMT call)
+                     ulTaskNotifyTake(portMAX_DELAY)
+                             |
+                             v
+                   rmt_tx_wait_all_done(chan, -1)    (block until the previous
+                             |                        ~80 us frame is done)
+                             v
+                   pixel[3] = {G, R, B}  each 0 or 32
+                             |
+                             v
+                   rmt_transmit(led_strip encoder)
+                             |
+                             v
+                   RMT TX channel, 10 MHz ticks
+                             |
+                             v
+                   GPIO 21 (CONFIG_LED_PIN_WS2812) -> onboard WS2812
+```
+
+**Plan of execution:**
+
+1. [x] `esp-drone/sdkconfig.defaults.esp32s3`: fix the missing newline
+       after `CPU_FREQ_MHZ=240` and the duplicate `LED_PIN_RED`;
+       `MPU_PIN_INT=13`; `LED_PIN_WS2812=21`; LED_PIN_BLUE/GREEN/RED=21.
+2. [x] `esp-drone/main/Kconfig.projbuild`: add `LED_PIN_WS2812` (default
+       21) under "led config".
+3. [x] `esp-drone/components/drivers/general/led/`: WS2812 backend
+       (`led_esp32.c`), encoder files, `REQUIRES driver`.
+4. [x] `espdrone-overrides.sdkconfig` re-synced (same CONFIG_ lines as the
+       appended block; comments rewritten: INT 13, WS2812 backend,
+       nFAULT/nSLEEP untouched).
+5. [x] Clean build: `rm -f sdkconfig && idf.py set-target esp32s3 &&
+       idf.py build` on IDF v5.0 — see the Session 5 PR for the size line.
+6. [x] `patches/esp-drone-espfly.patch` + `patches/README.md` tracked here
+       (patch = upstream db0f656 -> working tree, verified by re-applying
+       to pristine copies; 9 files, esp-now vendor copy excluded).
+6b. [x] Nested repo: branch `espfly-0010` from `db0f656`, tree clean —
+       `491309e` (Aug build fixes: ADC channel, esp-now 2.1.1 vendored),
+       `2fe79cf` (pin map + first WS2812 backend), `032d336` (LED task
+       fix, 2026-09-11). Local only, never pushed. Patch regenerated as
+       `git diff db0f656..032d336` (9 files, reverse-apply checked).
+7. [x] 2026-09-11 — Flashed unit 1 (USB serial 3C:0F:02:E4:D8:4C).
+       First build (`2fe79cf`) reboot-looped every 10.5 s with a
+       LEDSEQCMD stack overflow; re-flashed with `032d336` at ~23:31.
+       After the USB replug at 23:45 a 75 s passive serial capture
+       shows 0 `rst:`, 0 overflow, 0 `rmt:` lines; AP
+       `ESPFLY-0010_3C0F02E4D84D` visible on channel 6. Details under
+       "Reboot loop + fix" below. Not re-checked in this pass: the
+       `gpio:` claim lines and the LED colour sequence by eye.
+8. [x] 2026-09-11 — INT on GPIO 13 = 100 edges/s at the 100 Hz sample
+       rate (live MicroPython check on unit 1 before the flash; MPU-6050
+       at 0x68 on SDA 10 / SCL 9). The pin the firmware reads carries
+       the data-ready edge; no reset in the 75 s firmware capture.
+
+### Reboot loop + fix — 2026-09-11
+
+The first Session 5 build on unit 1 rebooted every ~10.5 s with
+`***ERROR*** A stack overflow in task LEDSEQCMD has been detected`
+(capture `boot3.raw`). Root cause, verified in the vendor tree and the
+IDF v5.0 source:
+
+1. LEDSEQCMD's stack is `2 * CONFIG_BASE_STACK_SIZE` = 2048 B
+   (`components/config/include/config.h:152`); only ~1332 B are free
+   at idle.
+2. The first WS2812 backend called `rmt_tx_wait_all_done(chan, 0)`
+   inline from `ledSet`. In IDF v5.0 (`rmt_tx.c:540`) a zero timeout
+   fails whenever the previous ~80 µs frame is still in flight — it
+   drops the frame AND runs `ESP_LOGE("flush timeout")` on the caller's
+   stack.
+3. At `systemStart` ledseq issues back-to-back `ledSet` calls; the
+   second one landed on that ESP_LOGE/vprintf path inside LEDSEQCMD and
+   overflowed it -> reboot every 10.5 s.
+4. Fix (vendor `032d336`, patch v2): setters only write `state[3]` +
+   `xTaskNotifyGive`; a `ws2812Task` (3072 B, prio 1) owns every RMT
+   call and waits with a blocking timeout. No polling, no rmt log
+   lines; bursts collapse into one frame.
+5. cfassert path: the notify is harmless (interrupts off = critical
+   section), the task cannot run, the frame may not go out — accepted
+   and documented in the `led_esp32.c` header. `led.h` untouched.
+
+**Flash / boot record (unit 1, USB serial 3C:0F:02:E4:D8:4C):**
+
+| Time (2026-09-11) | Action | Result |
+|---|---|---|
+| ~23:15 | erase + flash first Session 5 build | reboot loop, LEDSEQCMD overflow (`boot3.raw`) |
+| ~23:31 | re-flash with `032d336` | chip parked in download mode after `idf.py flash` (expected over USB-JTAG) |
+| 23:45 | USB replug, 75 s passive capture (port opened with DTR/RTS asserted, no reset) | 0 `rst:`, 0 overflow, 0 `rmt:` |
+| after | WiFi scan | AP `ESPFLY-0010_3C0F02E4D84D` on channel 6 |
+
+**Same unit, live MicroPython pin check (before the flash):** I2C on
+SDA 10 / SCL 9 confirmed (MPU-6050 answers at 0x68); **BMP280 ABSENT**
+at 0x76 and 0x77 — wiring check pending; esp-drone ignores it, the
+MicroPython `step4_baro` test cannot pass on this unit until it is
+found. MPU INT on GPIO 13 = 100 edges/s. GPIO 6 (nSLEEP) held HIGH by
+the module; GPIO 5 (nFAULT) readings consistent with an open-drain
+output.
+
+**Two units on the bench:** unit 2 (USB serial 3C:0F:02:E4:DD:18) still
+runs the 2026-08-19 build (INT 7, LEDs 11/12/13); its snapshot is PR #4
+(`unit2/board-snapshot`). Identify a board by its USB serial (`ioreg`),
+never by `/dev/cu.*` port number — the numbers change with plug order.
+
+## Session 6 — 2026-09-12 — Controls dead: inverted IMU → tumble kill
+
+**Trigger:** Unit 1 on the Session 5 build boots clean, the AP is up,
+the app connects — but under app control the motors spin for a split
+second and stop. Every attempt ends the same way and the console says
+nothing.
+
+**Root cause (verified in source and on the bench):** the GY-521 on
+unit 1 is mounted upside down (header on the drone's right side, chips
+underneath), so the MPU-6050 reports acc.z = -1 g at rest. The tumble
+detector in `sitaw.c:118-147` counts samples with acc.z <= -0.5 g once
+the motor ratio sum exceeds 1000; 30 consecutive samples at 1 kHz
+(30 ms) declares a tumble and calls `stabilizerSetEmergencyStop()`
+(`stabilizer.c:59,307-310`). The stop is a latch: motors go to zero,
+no log line, cleared only by a reboot or by writing param
+`stabilizer.stop` = 0. A 7-minute passive console capture on unit 1
+showed zero `rst:` lines — not a brownout, not a reset.
+
+**Kill path:**
+
+```
+ GY-521 mounted upside down (unit 1: header on the right, chips underneath)
+      |
+      v
+ MPU-6050 raw: acc.z = -1 g at rest
+      |
+      v
+ sensors_mpu6050_hm5883L_ms5611.c  processAccGyroMeasurements()  (~387-405)
+      |                                ^
+      |                                +-- FIX lands here: CONFIG_IMU_MOUNT_INVERTED_Y
+      |                                    negates acc/gyro x and z after the
+      |                                    register swap -> acc.z = +1 g
+      v
+ sensorData.acc.z = -1.0                              (unfixed build)
+      |
+      v
+ stabilizerTask, 1 kHz  ---->  sitaw.c:118-147 tumble detector
+                                     |
+                       motor ratio sum > 1000 ?    (throttle applied)
+                                     | yes
+                                     v
+                       acc.z <= -0.5 g for 30 samples (30 ms)
+                                     | yes
+                                     v
+                       stabilizerSetEmergencyStop()   stabilizer.c:59,307-310
+                                     |
+                                     v
+                       emergency-stop LATCH -> motors = 0
+                       no log line; cleared only by reboot
+                       or param stabilizer.stop = 0
+```
+
+**Fix (vendor `986bcf9` + `a4a6801` + `3540dbd`; patch v4 =
+`git diff db0f656..3540dbd`, 11 files, reverse-apply checked):**
+
+- `main/Kconfig.projbuild`: `choice IMU_MOUNT` — `IMU_MOUNT_UPRIGHT`
+  (default) / `IMU_MOUNT_INVERTED_X` / `IMU_MOUNT_INVERTED_Y` — plus
+  `ATTITUDE_BENCH_PRINT` (default n).
+- `sensors_mpu6050_hm5883L_ms5611.c` (~lines 387-405): after the
+  existing register swap, negate the body-frame axes for the chosen
+  mount — INVERTED_X: gyro/acc y and z; INVERTED_Y: gyro/acc x and z
+  (a 180° body rotation about the roll or the pitch axis) — before the
+  LPF and align-to-gravity steps.
+- `stabilizer.c`: under `CONFIG_ATTITUDE_BENCH_PRINT`, a 1 Hz
+  `BENCH acc.z=… roll=… pitch=… yaw=…` line on the USB console.
+- `espdrone-overrides.sdkconfig` / `sdkconfig.defaults.esp32s3`: unit 1
+  = `CONFIG_IMU_MOUNT_INVERTED_Y=y`; `CONFIG_ATTITUDE_BENCH_PRINT=n`
+  (flight build, `3540dbd`; the bench runs below were built with `=y`).
+
+**Bench (unit 1, USB, props off, `passive_read4.py` console capture):**
+
+| Build | Level | Nose down | Right side down | Verdict |
+|---|---|---|---|---|
+| INVERTED_X (`42955c4`) | acc.z +1.00 | pitch **+32.8** | roll **-42 … -21** | acc.z fixed, both horizontal signs reversed → wrong axis |
+| INVERTED_Y (`a4a6801`) | acc.z 0.99, roll +5.5, pitch +4.4 | pitch **-26.9** | roll **+34 … +36** | matches the firmware convention |
+
+Reference sign convention, verified in source: nose down ⇒ pitch
+NEGATIVE (`sensfusion6.c:273-274`; `kalman_core.c:1051-1059` legacy
+negation; `controller_pid.c:109` uses `-gyro.y`;
+`power_distribution_stock.c:88-94` adds +pitch on M1/M4 = the front
+motors); right side down ⇒ roll POSITIVE. The geometry guess from the
+header position was wrong twice — only the bench print settled it.
+
+Throttle hold, 5 s, INVERTED_Y build: all four motors ran and held, no
+kill.
+
+**Plan of execution:**
+
+1. [x] Trace the kill from the symptom: `sitaw.c` tumble detector →
+       `stabilizerSetEmergencyStop()` latch; 7-min capture with zero
+       resets rules out brownout.
+2. [x] Vendor `986bcf9`: Kconfig `choice IMU_MOUNT` +
+       `ATTITUDE_BENCH_PRINT`; body-frame negations in the MPU-6050
+       driver; 1 Hz BENCH line in `stabilizer.c`.
+3. [x] Vendor `42955c4`: build + flash INVERTED_X; bench print: acc.z
+       ok, pitch and roll reversed → superseded.
+4. [x] Vendor `a4a6801`: build + flash INVERTED_Y; bench print signs
+       match the reference convention; 5 s throttle hold, all four
+       motors.
+5. [x] Track it in this repo (PR #3): patch v4 (11 files, reverse-apply
+       checked), `espdrone-overrides.sdkconfig` re-synced with the IMU
+       block, `patches/README.md` commit list, CLAUDE.md learnings.
+6. [x] Flight build: `CONFIG_ATTITUDE_BENCH_PRINT=n` in both
+       `esp-drone/sdkconfig.defaults.esp32s3` and
+       `espdrone-overrides.sdkconfig`, clean rebuild done (vendor
+       `3540dbd`). **Built, NOT yet flashed** — unit 1 still runs the
+       `a4a6801` bench build. To flash:
+       `cd esp-drone && idf.py -p /dev/cu.usbmodem<unit-1 port> flash`,
+       then replug USB (the chip parks in download mode after the
+       flash) and confirm no `BENCH` lines in a passive capture.
+7. [ ] BMP280 still absent on unit 1 (Session 5) — wiring check.
+8. [ ] Boot log claims GPIO 34 for the flow-deck CS0 default — harmless
+       (nothing wired there); pin it off in Kconfig if it ever matters.
+9. [ ] Unit 3 discovery is staged only in the job tmp dir (firmware sha
+       `8c6039d4…`, `portmap.py`, `u3_*.py`) — copy somewhere durable
+       before the tmp dir is cleaned.

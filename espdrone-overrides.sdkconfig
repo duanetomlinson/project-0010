@@ -2,12 +2,14 @@
 # Board: Waveshare ESP32-S3-Zero + 2x DRV8833 (single-input drive)
 #
 # Applied by appending to esp-drone/sdkconfig.defaults.esp32s3.
-# If esp-drone/ is re-cloned, re-append this file:
+# If esp-drone/ is re-cloned, follow patches/README.md (source patch +
+# esp-now re-vendor), then re-append this file:
 #   cat espdrone-overrides.sdkconfig >> esp-drone/sdkconfig.defaults.esp32s3
 # (defaults only take effect on a fresh build: delete esp-drone/sdkconfig
 # first if it exists, then idf.py set-target esp32s3 && idf.py build)
 #
-# Build fixes applied in the esp-drone/ checkout (2026-08-19):
+# Build fixes applied in the esp-drone/ checkout (2026-08-19), all
+# captured in patches/esp-drone-espfly.patch:
 # - esp-now 2.1.1 vendored at esp-drone/components/espressif__esp-now
 #   (latest 2.5.x needs configRUN_TIME_COUNTER_TYPE, absent in IDF
 #   v5.0's FreeRTOS), referenced via `override_path` from BOTH
@@ -32,19 +34,38 @@ CONFIG_MOTOR04_PIN=3
 CONFIG_I2C0_PIN_SDA=10
 CONFIG_I2C0_PIN_SCL=9
 
-# MPU6050 data-ready interrupt -- GY-521 INT pin soldered to GPIO 7.
+# MPU6050 data-ready interrupt -- GY-521 INT wired to GPIO 13 (as-built
+# map 2026-09-11; was GPIO 7 during the Aug bring-up).
 # MANDATORY: the sensor task blocks until this ISR fires.
-CONFIG_MPU_PIN_INT=7
+CONFIG_MPU_PIN_INT=13
 
 # Unique AP SSID per drone (final SSID gets -MAC appended)
 CONFIG_WIFI_BASE_SSID="ESPFLY-0010"
 
-# Status LEDs: none wired on this build. Defaults (blue=7, green=9,
-# red=8) collide with MPU INT (7) and I2C SCL (9) -- the LED task
-# would toggle them mid-flight. Parked on free pins instead.
-CONFIG_LED_PIN_BLUE=11
-CONFIG_LED_PIN_GREEN=12
-CONFIG_LED_PIN_RED=13
+# Status LED: the onboard WS2812 on GPIO 21 is the ONLY LED on this
+# board. led_esp32.c (patched, see patches/) mixes the firmware's three
+# logical LEDs into that one pixel:
+#   BLUE  = system / link down     GREEN = link up
+#   RED   = charging / low battery / error (cfassert)
+# Backend design: ledSet/ledClearAll/ledSetAll only write state[] and
+# xTaskNotifyGive a dedicated ws2812Task (3072 B stack, prio 1) that
+# owns every RMT call and waits for the previous frame to finish before
+# sending the next. Nothing RMT-related runs on the 2 KB LEDSEQCMD task
+# (the first backend polled the driver inline from ledSet and overflowed
+# it -- PLAN.md Session 5, "Reboot loop + fix").
+# LED_PIN_BLUE/GREEN/RED are no longer read by the backend; they are
+# pinned to the same GPIO so the generated sdkconfig shows no phantom
+# pin claims (their upstream defaults 7/9/8 = MPU INT / SCL / ADC).
+CONFIG_LED_PIN_WS2812=21
+CONFIG_LED_PIN_BLUE=21
+CONFIG_LED_PIN_GREEN=21
+CONFIG_LED_PIN_RED=21
+
+# DRV8833 control lines (both modules Y-spliced), NOT touched by firmware:
+#   GPIO 5 = nFAULT (ULT), open-drain, active LOW
+#   GPIO 6 = nSLEEP (EEP), held HIGH by the module -> drivers always awake
+# esp-drone has no sleep/fault concept, so no CONFIG symbol maps to either
+# pin. Leave them alone.
 
 # Battery-voltage ADC: default GPIO2 = our rear-right motor pin --
 # putting it in analog mode disconnects that motor's PWM (found live:
@@ -54,3 +75,21 @@ CONFIG_LED_PIN_RED=13
 # channel is hardcoded ADC_CHANNEL_1 (GPIO2); change to ADC_CHANNEL_7
 # (GPIO8). Nothing is wired to GPIO 8, so battery readings are noise.
 CONFIG_ADC1_PIN=8
+
+# IMU mounting orientation. The MPU-6050 may be mounted upside down on
+# the ESP-FLY frame; an inverted IMU reads acc.z = -1 g at rest and trips
+# the tumble detector (sitaw.c) -> emergency stop the moment motors spin.
+# Exactly ONE of the three may be =y. To switch: change the =y line here,
+# then `rm -f sdkconfig && idf.py set-target esp32s3 && idf.py build`.
+#   CONFIG_IMU_MOUNT_UPRIGHT=y     chip side up, no remap
+#   CONFIG_IMU_MOUNT_INVERTED_X=y  upside down, flipped about roll axis
+#                                  (connector edge on front/back)
+#   CONFIG_IMU_MOUNT_INVERTED_Y=y  upside down, flipped about pitch axis
+#                                  (connector edge on a side)
+# Confirm in cfclient, level, motors off: acc.z must read +1.0.
+# unit 1: GY-521 upside down, header on the right side -> flipped about
+# the pitch axis (bench-verified 2026-09-12)
+CONFIG_IMU_MOUNT_INVERTED_Y=y
+
+# flight build; set y for bench verification
+CONFIG_ATTITUDE_BENCH_PRINT=n
