@@ -23,6 +23,8 @@ from git archaeology.
 | `step6_motors.py` | test | config, status_led | Per-motor spin, all-four load, nFAULT monitor, status LED. EEP wake only when `MOTOR_SLEEP_DRIVE=True`. |
 | `main.py` | boot | — | All commented out on purpose. |
 | `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
+| `espdrone-overrides.sdkconfig` | config | — | Tracked copy of the Kconfig values appended to `esp-drone/sdkconfig.defaults.esp32s3` (pins, SSID, LED). Every pin the firmware uses is a `CONFIG_*` symbol here. |
+| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c` + RMT led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe. |
 
 ### step6_motors.py logic
 
@@ -304,8 +306,109 @@ driving GPIO6 as an output.
 6. [ ] Bench: trace ULT/EEP at both modules; confirm GPIO5 reads HIGH
        via nFAULT pull-up and GPIO6 is nSLEEP. Then decide whether to
        set MOTOR_SLEEP_DRIVE=True.
-7. [ ] Re-sync `espdrone-overrides.sdkconfig` (MPU_PIN_INT 7 → 13) and
-       re-verify the INT edge count on GPIO 13 — separate pass.
+7. [x] Re-sync `espdrone-overrides.sdkconfig` (MPU_PIN_INT 7 → 13) —
+       done in Session 5. Bench re-verify of the INT edge count on
+       GPIO 13 is tracked there.
 8. [ ] Push `config.py`, `status_led.py`, `step6_motors.py`,
        `step1_hello.py` to the board via mpremote; run step1 (LED
        blink) and step6 (props off) and watch the status LED.
+
+## Session 5 — 2026-09-11 — ESP-Drone firmware onto the as-built map + WS2812 status LED
+
+**Trigger:** Session 4 moved the MicroPython side to the as-built map
+(MPU INT on GPIO 13, WS2812 on GPIO 21 as the only LED). The ESP-Drone
+build still carried INT=7 and three "parked" discrete-LED pins, one of
+which (RED=13) now collided with MPU INT. Every pin the firmware touches
+must be a Kconfig symbol, and the vendor-tree changes must be recoverable
+(the `esp-drone/` checkout is git-ignored).
+
+**Pin map used (authoritative, unchanged unless noted):**
+
+| Signal | GPIO | Kconfig symbol |
+|--------|------|----------------|
+| M1 front-right / M2 rear-right / M3 rear-left / M4 front-left | 1 / 2 / 4 / 3 | `MOTOR01..04_PIN` |
+| I2C SDA / SCL | 10 / 9 | `I2C0_PIN_SDA` / `I2C0_PIN_SCL` |
+| MPU-6050 INT | **13** (was 7) | `MPU_PIN_INT` |
+| Battery ADC (nothing wired) | 8 | `ADC1_PIN` + `adc_esp32.c` channel patch |
+| WS2812 status LED | 21 | **`LED_PIN_WS2812`** (new) |
+| DRV8833 nFAULT / nSLEEP | 5 / 6 | none — firmware never touches them |
+
+**Decisions:**
+- `led_esp32.c` is rewritten as a WS2812 backend over the IDF v5.0 RMT
+  TX driver (`led_strip_encoder.c/.h` copied from the IDF `rmt/led_strip`
+  example). `led.h` is untouched, so `ledseq.c`, `system.c`, `cfassert.c`
+  compile as-is. The three logical LEDs are on/off bits mixed into one
+  GRB pixel at brightness 32/255: BLUE = system / link down, GREEN =
+  link up, RED = charge / low battery / assert.
+- `ledSet` never blocks: `cfassert.c` calls it after
+  `portDISABLE_INTERRUPTS()`. The backend asks
+  `rmt_tx_wait_all_done(chan, 0)` and skips the frame if the previous
+  one is still on the wire. Known consequence: on an assert only the
+  first frame (all off) is guaranteed to reach the LED; the console
+  "Assert failed" line is the real signal.
+- `CONFIG_LED_PIN_BLUE/GREEN/RED` are kept as symbols (upstream Kconfig)
+  but pinned to 21 in the overrides so the generated `sdkconfig` shows no
+  phantom claims on 7/9/8; the backend does not read them.
+- The vendor tree gets a local branch `espfly-0010` (from upstream
+  `db0f656`) with everything committed, and the tracked delta lives in
+  `patches/esp-drone-espfly.patch` (esp-now vendor copy excluded — it is
+  re-vendored, not patched).
+
+**LED path:**
+
+```
+ ledseq.c timer cb        system.c           cfassert.c (IRQs off)
+      |                      |                       |
+      +---------- ledSet(led, on) / ledClearAll / ledSetAll ----------+
+                             |
+                             v
+                   state[3]  {BLUE, RED, GREEN}      (led_esp32.c)
+                             |
+                             v
+                   pixel[3] = {G, R, B}  each 0 or 32
+                             |
+              rmt_tx_wait_all_done(chan, 0) busy? --yes--> skip frame
+                             | no
+                             v
+                   rmt_transmit(led_strip encoder)
+                             |
+                             v
+                   RMT TX channel, 10 MHz ticks
+                             |
+                             v
+                   GPIO 21 (CONFIG_LED_PIN_WS2812) -> onboard WS2812
+```
+
+**Plan of execution:**
+
+1. [x] `esp-drone/sdkconfig.defaults.esp32s3`: fix the missing newline
+       after `CPU_FREQ_MHZ=240` and the duplicate `LED_PIN_RED`;
+       `MPU_PIN_INT=13`; `LED_PIN_WS2812=21`; LED_PIN_BLUE/GREEN/RED=21.
+2. [x] `esp-drone/main/Kconfig.projbuild`: add `LED_PIN_WS2812` (default
+       21) under "led config".
+3. [x] `esp-drone/components/drivers/general/led/`: WS2812 backend
+       (`led_esp32.c`), encoder files, `REQUIRES driver`.
+4. [x] `espdrone-overrides.sdkconfig` re-synced (same CONFIG_ lines as the
+       appended block; comments rewritten: INT 13, WS2812 backend,
+       nFAULT/nSLEEP untouched).
+5. [x] Clean build: `rm -f sdkconfig && idf.py set-target esp32s3 &&
+       idf.py build` on IDF v5.0 — see the Session 5 PR for the size line.
+6. [x] `patches/esp-drone-espfly.patch` + `patches/README.md` tracked here
+       (patch = upstream db0f656 -> working tree, verified by re-applying
+       to pristine copies; 9 files, esp-now vendor copy excluded).
+6b. [ ] Nested repo: branch `espfly-0010` with everything committed. Not
+       done by the agent (its worktree sandbox refuses git in the nested
+       checkout). By hand:
+       `git -C esp-drone checkout -b espfly-0010 && git -C esp-drone add
+       sdkconfig.defaults.esp32s3 main/Kconfig.projbuild
+       components/drivers/general/led components/drivers/general/adc/adc_esp32.c
+       components/drivers/general/wifi/idf_component.yml
+       components/core/crazyflie/idf_component.yml
+       components/espressif__esp-now && git -C esp-drone commit`.
+7. [ ] Flash (user, not automated): `cd esp-drone && idf.py -p <port>
+       flash`, then RESET button or USB replug (software reset parks the
+       S3 in download mode — see CLAUDE.md Learnings). Verify via the USB
+       console: `MPU6050 [OK]`, `gpio:` lines claim only 1/2/3/4, 9/10,
+       13, 8, 21; WS2812 shows blue after self-test, green on link.
+8. [ ] Bench: re-verify the INT edge count on GPIO 13 (was 101/s on
+       GPIO 7) from the boot log / step3 before trusting the sensor task.
