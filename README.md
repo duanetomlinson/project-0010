@@ -35,8 +35,10 @@ fine at these wire lengths — it just makes the pull-up stiffer.
 3, 45, 46 (strapping); 19, 20 (native USB); 21 (WS2812 LED); 26–32 (flash).
 GPIO 33–37 aren't broken out at all on this board.
 
-GPIO 4–9 are all free, so the drone pin map (motors on 4–7, I2C on 8–9)
-fits this board unchanged.
+As-built pin map (from `config.py`): motors on GPIO 1–4, EEP 5, ULT 6,
+MPU INT 7, I2C on 9/10. Interactive diagram of every wire, both DRV8833
+modules and the power star: open **`docs/esp-fly-wiring.html`** in a
+browser (single file, no network needed).
 
 ---
 
@@ -176,10 +178,13 @@ sit still and level while it does.
 The discrete-MOSFET stage originally planned here was dropped in favor
 of two DRV8833 dual H-bridge modules (integrated current limit, thermal
 and undervoltage protection, fault output). Full wiring map and
-decision record live in `PLAN.md`; pins live in `config.py`.
+decision record live in `PLAN.md`; pins live in `config.py`; the
+interactive wiring page is `docs/esp-fly-wiring.html`.
 
 - One GPIO per motor (IN2/IN4 jumpered to GND on each module):
-  GPIO 1 = front-right, 2 = rear-right, 3 = rear-left, 4 = front-left
+  GPIO 1 = front-right, 2 = rear-right, 3 = front-left, 4 = rear-left
+  (left side verified by single-pin isolation 2026-08-19 — the original
+  wiring notes had it swapped)
 - EEP (nSLEEP) on GPIO 5, ULT (nFAULT) on GPIO 6 — each one wire
   Y-spliced to both modules. J1 cleared on both or EEP does nothing.
 - Motor VCC/GND at the star point, fed by both the battery and the
