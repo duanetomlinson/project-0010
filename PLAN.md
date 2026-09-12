@@ -396,15 +396,9 @@ must be a Kconfig symbol, and the vendor-tree changes must be recoverable
 6. [x] `patches/esp-drone-espfly.patch` + `patches/README.md` tracked here
        (patch = upstream db0f656 -> working tree, verified by re-applying
        to pristine copies; 9 files, esp-now vendor copy excluded).
-6b. [ ] Nested repo: branch `espfly-0010` with everything committed. Not
-       done by the agent (its worktree sandbox refuses git in the nested
-       checkout). By hand:
-       `git -C esp-drone checkout -b espfly-0010 && git -C esp-drone add
-       sdkconfig.defaults.esp32s3 main/Kconfig.projbuild
-       components/drivers/general/led components/drivers/general/adc/adc_esp32.c
-       components/drivers/general/wifi/idf_component.yml
-       components/core/crazyflie/idf_component.yml
-       components/espressif__esp-now && git -C esp-drone commit`.
+6b. [x] Nested repo: branch `espfly-0010` from `db0f656`, tree clean —
+       `491309e` (Aug build fixes: ADC channel, esp-now 2.1.1 vendored)
+       and `2fe79cf` (pin map + WS2812 backend). Local only, never pushed.
 7. [ ] Flash (user, not automated): `cd esp-drone && idf.py -p <port>
        flash`, then RESET button or USB replug (software reset parks the
        S3 in download mode — see CLAUDE.md Learnings). Verify via the USB

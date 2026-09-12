@@ -3,9 +3,10 @@
 `esp-drone/` is a git-ignored checkout of
 [espressif/esp-drone](https://github.com/espressif/esp-drone) at commit
 `db0f656`. Our source changes to it live in `esp-drone-espfly.patch`;
-our Kconfig values live in `../espdrone-overrides.sdkconfig`. The patch was
-verified by applying it to pristine `db0f656` copies of the touched files
-and comparing byte-for-byte with the working tree.
+our Kconfig values live in `../espdrone-overrides.sdkconfig`. Locally the
+checkout also carries branch `espfly-0010` (commits `491309e` build fixes,
+`2fe79cf` pin map + WS2812) with the same changes committed; the patch is
+`git diff db0f656` of that branch, esp-now vendor copy excluded.
 
 What the patch contains:
 
