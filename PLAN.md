@@ -21,6 +21,7 @@ from git archaeology.
 | `step5_combined.py` | test | config, both drivers | Both sensors, one loop, rate benchmark. |
 | `step6_motors.py` | test | config | DRV8833 wake, per-motor spin, all-four load, fault monitor. |
 | `main.py` | boot | — | All commented out on purpose. |
+| `boards/unit-<id>/` | snapshot | — | Per-unit captures: `BOARD.md` (identity, firmware, pin diff vs repo), boot log, as-flashed sdkconfig, flash dump `.gz`. Unit id = last 6 hex of the USB serial. |
 
 ### step6_motors.py logic
 
@@ -220,3 +221,26 @@ Next (flight bring-up) — **POWER IS THE CURRENT FOCUS**:
 Minor / cosmetic: battery-voltage ADC not wired (battery warnings
 bogus), buzzer/LED pin defaults don't match this board (disable or
 ignore), set a unique WIFI_BASE_SSID.
+
+## Session 3 — 2026-09-11 — Unit 2 firmware snapshot (`boards/unit-e4dd18/`)
+
+A second ESP-FLY unit (USB serial `3C:0F:02:E4:DD:18`, `/dev/cu.usbmodem2101`)
+was plugged in. It is NOT MicroPython: it runs the ESP-Drone build from
+2026-08-19 (`db0f656-dirty`, compiled 01:25:04, IDF `d9f9b7d`). Unit 1
+(`3C:0F:02:E4:D8:4C`, `/dev/cu.usbmodem101`) was being flashed at the same
+time and was never opened. Captured read-only, nothing written to unit 2.
+
+1. [x] Identify unit 2 by USB serial (ioreg), not by port name.
+2. [x] Boot log over USB-Serial/JTAG + WiFi scan: AP `ESPFLY-0010_3C0F02E4DD19`
+       visible from the Mac. Log saved to `boards/unit-e4dd18/boot-log.txt`.
+3. [x] Reconstruct the source: overrides at commit `5a74531` (compile time
+       falls between 9483f6a and 5a74531; the log claims GPIO 13 as an LED,
+       which only 5a74531 sets). Saved as `espdrone-overrides.as-flashed.sdkconfig`.
+4. [ ] Full 4 MB flash dump (`esptool.py read_flash 0 0x400000`) — blocked by
+       the agent permission classifier this session; run by hand, then
+       `gzip -9 -k`, commit the `.gz`, fill the sha256 + `image_info` fields
+       in `BOARD.md`. Replug unit 2 afterwards (S3 parks in download mode).
+5. [x] `BOARD.md` pin table: unit 2 as-flashed vs unit 1 current map — the
+       reference example of per-unit pin variability (MPU INT 7 vs 13,
+       discrete LEDs 11/12/13 vs WS2812 on 21).
+

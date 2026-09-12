@@ -25,3 +25,6 @@ TestResults.xml
 # Vendor checkout of espressif/esp-drone (own git repo; our overrides
 # live in espdrone-overrides.sdkconfig at the repo root)
 esp-drone/
+
+# Raw per-unit flash dumps: commit only the .gz next to it
+boards/**/flash-4MB.bin

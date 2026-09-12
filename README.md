@@ -112,6 +112,20 @@ boot, so leaving a test loop in it means fighting the board for the REPL.
 
 ---
 
+## Per-unit configuration
+
+`config.py` is the only file that changes between drone units: every
+other module reads its pins from there. Each physical unit gets its own
+pin values (MPU INT, status LED, which pins are free) because the boards
+are hand-wired.
+
+- `boards/unit-<last 6 of USB serial>/` holds a captured snapshot per
+  unit (`BOARD.md` with the pin diff against the repo, plus whatever was
+  on the board: MicroPython files or a full flash dump).
+- `docs/esp-fly-wiring.html` is the interactive wiring page.
+
+---
+
 ## File map
 
 | File | Type | What it does |
