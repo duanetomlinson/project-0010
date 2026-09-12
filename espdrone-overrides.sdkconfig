@@ -75,3 +75,21 @@ CONFIG_LED_PIN_RED=21
 # channel is hardcoded ADC_CHANNEL_1 (GPIO2); change to ADC_CHANNEL_7
 # (GPIO8). Nothing is wired to GPIO 8, so battery readings are noise.
 CONFIG_ADC1_PIN=8
+
+# IMU mounting orientation. The MPU-6050 may be mounted upside down on
+# the ESP-FLY frame; an inverted IMU reads acc.z = -1 g at rest and trips
+# the tumble detector (sitaw.c) -> emergency stop the moment motors spin.
+# Exactly ONE of the three may be =y. To switch: change the =y line here,
+# then `rm -f sdkconfig && idf.py set-target esp32s3 && idf.py build`.
+#   CONFIG_IMU_MOUNT_UPRIGHT=y     chip side up, no remap
+#   CONFIG_IMU_MOUNT_INVERTED_X=y  upside down, flipped about roll axis
+#                                  (connector edge on front/back)
+#   CONFIG_IMU_MOUNT_INVERTED_Y=y  upside down, flipped about pitch axis
+#                                  (connector edge on a side)
+# Confirm in cfclient, level, motors off: acc.z must read +1.0.
+# unit 1: GY-521 upside down, header on the right side -> flipped about
+# the pitch axis (bench-verified 2026-09-12)
+CONFIG_IMU_MOUNT_INVERTED_Y=y
+
+# flight build; set y for bench verification
+CONFIG_ATTITUDE_BENCH_PRINT=n

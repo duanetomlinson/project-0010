@@ -1,3 +1,33 @@
+diff --git a/components/core/crazyflie/hal/src/sensors_mpu6050_hm5883L_ms5611.c b/components/core/crazyflie/hal/src/sensors_mpu6050_hm5883L_ms5611.c
+index f69caa7..21e3814 100644
+--- a/components/core/crazyflie/hal/src/sensors_mpu6050_hm5883L_ms5611.c
++++ b/components/core/crazyflie/hal/src/sensors_mpu6050_hm5883L_ms5611.c
+@@ -382,6 +382,13 @@ void processAccGyroMeasurements(const uint8_t *buffer)
+ 
+     sensorData.gyro.y = (gyroRaw.y - gyroBias.y) * SENSORS_DEG_PER_LSB_CFG;
+     sensorData.gyro.z = (gyroRaw.z - gyroBias.z) * SENSORS_DEG_PER_LSB_CFG;
++    /* IMU mounted upside down (CONFIG_IMU_MOUNT_*): rotate 180 deg in body frame
++       so acc.z reads +1 g at rest and the tumble detector (sitaw.c) stays quiet. */
++#if CONFIG_IMU_MOUNT_INVERTED_X
++    sensorData.gyro.y = -sensorData.gyro.y; sensorData.gyro.z = -sensorData.gyro.z;
++#elif CONFIG_IMU_MOUNT_INVERTED_Y
++    sensorData.gyro.x = -sensorData.gyro.x; sensorData.gyro.z = -sensorData.gyro.z;
++#endif
+     /* sensors step 2.5 low pass filter */
+     applyAxis3fLpf((lpf2pData *)(&gyroLpf), &sensorData.gyro);
+ 
+@@ -393,6 +400,11 @@ void processAccGyroMeasurements(const uint8_t *buffer)
+ 
+     accScaled.y = (accelRaw.y) * SENSORS_G_PER_LSB_CFG / accScale;
+     accScaled.z = (accelRaw.z) * SENSORS_G_PER_LSB_CFG / accScale;
++#if CONFIG_IMU_MOUNT_INVERTED_X
++    accScaled.y = -accScaled.y; accScaled.z = -accScaled.z;
++#elif CONFIG_IMU_MOUNT_INVERTED_Y
++    accScaled.x = -accScaled.x; accScaled.z = -accScaled.z;
++#endif
+ 
+     /* sensors step 2.6 Compensate for a miss-aligned accelerometer. */
+     sensorsAccAlignToGravity(&accScaled, &sensorData.acc);
 diff --git a/components/core/crazyflie/idf_component.yml b/components/core/crazyflie/idf_component.yml
 index a1bbf62..888e80c 100644
 --- a/components/core/crazyflie/idf_component.yml
@@ -10,6 +40,23 @@ index a1bbf62..888e80c 100644
 +    override_path: "../../espressif__esp-now"
    idf:
      version: ">=4.1.0"
+diff --git a/components/core/crazyflie/modules/src/stabilizer.c b/components/core/crazyflie/modules/src/stabilizer.c
+index fe67fa3..d30f3cc 100644
+--- a/components/core/crazyflie/modules/src/stabilizer.c
++++ b/components/core/crazyflie/modules/src/stabilizer.c
+@@ -292,6 +292,12 @@ static void stabilizerTask(void* param)
+ 
+       stateEstimator(&state, &sensorData, &control, tick);
+       compressState();
++#if CONFIG_ATTITUDE_BENCH_PRINT
++      if (RATE_DO_EXECUTE(1, tick)) {
++        DEBUG_PRINTI("BENCH acc.z=%.2f roll=%.1f pitch=%.1f yaw=%.1f\n", (double)sensorData.acc.z,
++                     (double)state.attitude.roll, (double)state.attitude.pitch, (double)state.attitude.yaw);
++      }
++#endif
+ 
+       commanderGetSetpoint(&setpoint, &state);
+       compressSetpoint();
 diff --git a/components/drivers/general/adc/adc_esp32.c b/components/drivers/general/adc/adc_esp32.c
 index e5f9c9d..5c0fc93 100644
 --- a/components/drivers/general/adc/adc_esp32.c
@@ -431,10 +478,44 @@ index f594a7a..c8fa416 100644
      version: ">=4.1.0"
 -
 diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
-index f7c043c..b0d0462 100644
+index f7c043c..f9d8f11 100644
 --- a/main/Kconfig.projbuild
 +++ b/main/Kconfig.projbuild
-@@ -289,6 +289,21 @@ menu "ESPDrone Config"
+@@ -232,6 +232,33 @@ menu "ESPDrone Config"
+             help
+                 GPIO number (IOxx) MPU_PIN_INT
+ 
++        choice IMU_MOUNT
++            prompt "IMU mounting orientation"
++            default IMU_MOUNT_UPRIGHT
++            help
++                How the MPU-6050 is mounted on the frame. An IMU mounted
++                upside down reports acc.z = -1 g at rest, which trips the
++                tumble detector (sitaw.c) as soon as the motors spin and
++                latches the emergency stop. Pick the option matching your
++                build, then confirm with cfclient (Plotter tab, level,
++                motors off): acc.z must read +1.0. If it reads -1.0 the
++                wrong option is set.
++
++            config IMU_MOUNT_UPRIGHT
++                bool "Upright (chip side up, no remap)"
++            config IMU_MOUNT_INVERTED_X
++                bool "Upside down, flipped about the roll axis (connector edge on front/back)"
++            config IMU_MOUNT_INVERTED_Y
++                bool "Upside down, flipped about the pitch axis (connector edge on a side)"
++        endchoice
++
++        config ATTITUDE_BENCH_PRINT
++            bool "Print acc.z/roll/pitch/yaw at 1 Hz on the console (bench only)"
++            default n
++            help
++                Bench check of the IMU mounting remap: tilt the drone and
++                watch the BENCH line on the USB console. Set n for flight builds.
++
+         config ADC1_PIN
+             int "EXT01_PIN GPIO number"
+             range 32 39 if TARGET_ESPLANE_V1
+@@ -289,6 +316,21 @@ menu "ESPDrone Config"
              help
                  GPIO number (IOxx) LED_PIN_RED
  
@@ -457,10 +538,10 @@ index f7c043c..b0d0462 100644
  
      menu "motors config"
 diff --git a/sdkconfig.defaults.esp32s3 b/sdkconfig.defaults.esp32s3
-index cc2c8cb..2c7d187 100644
+index cc2c8cb..5e368d1 100644
 --- a/sdkconfig.defaults.esp32s3
 +++ b/sdkconfig.defaults.esp32s3
-@@ -1,3 +1,74 @@
+@@ -1,3 +1,92 @@
  CONFIG_FREERTOS_UNICORE=n
  CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 -CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
@@ -537,3 +618,21 @@ index cc2c8cb..2c7d187 100644
 +# channel is hardcoded ADC_CHANNEL_1 (GPIO2); change to ADC_CHANNEL_7
 +# (GPIO8). Nothing is wired to GPIO 8, so battery readings are noise.
 +CONFIG_ADC1_PIN=8
++
++# IMU mounting orientation. The MPU-6050 may be mounted upside down on
++# the ESP-FLY frame; an inverted IMU reads acc.z = -1 g at rest and trips
++# the tumble detector (sitaw.c) -> emergency stop the moment motors spin.
++# Exactly ONE of the three may be =y. To switch: change the =y line here,
++# then `rm -f sdkconfig && idf.py set-target esp32s3 && idf.py build`.
++#   CONFIG_IMU_MOUNT_UPRIGHT=y     chip side up, no remap
++#   CONFIG_IMU_MOUNT_INVERTED_X=y  upside down, flipped about roll axis
++#                                  (connector edge on front/back)
++#   CONFIG_IMU_MOUNT_INVERTED_Y=y  upside down, flipped about pitch axis
++#                                  (connector edge on a side)
++# Confirm in cfclient, level, motors off: acc.z must read +1.0.
++# unit 1: GY-521 upside down, header on the right side -> flipped about
++# the pitch axis (bench-verified 2026-09-12)
++CONFIG_IMU_MOUNT_INVERTED_Y=y
++
++# flight build; set y for bench verification
++CONFIG_ATTITUDE_BENCH_PRINT=n

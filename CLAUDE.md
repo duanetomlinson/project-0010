@@ -7,6 +7,22 @@ decision record; tests are `stepN_*.py`, run via `import stepN_...`.
 
 ## Learnings
 
+### 2026-09-12 · An upside-down IMU trips ESP-Drone's silent tumble kill — check acc.z = +1 g and the pitch/roll signs on the bench before first throttle · Claude Fable 5.1, session 01Qtp5KGh6v7qYUdaPuvsaBS
+
+**What I did:** Chased "motors spin a split second then stop" as a power/reset problem, then picked the remap (`IMU_MOUNT_INVERTED_X`) from where the GY-521 header sits on the frame.
+**What went wrong:** The kill was `sitaw.c`'s tumble detector: acc.z = -1 g at rest (chips underneath) for 30 samples once throttle > 1000 ⇒ `stabilizerSetEmergencyStop()`, a latch with no log line. The geometry guess was wrong twice — INVERTED_X made acc.z +1 but reversed both pitch and roll; only the 1 Hz BENCH print settled it on INVERTED_Y.
+**Root cause:** The emergency stop is silent and the mount axis cannot be read off the board; the only trustworthy signal is the firmware's own attitude output under known tilts.
+**Rule to follow:** Before first throttle on any unit: level ⇒ acc.z = +1.0; nose down ⇒ pitch NEGATIVE; right side down ⇒ roll POSITIVE (convention from `sensfusion6.c`, `controller_pid.c`, `power_distribution_stock.c`). Motors that stop instantly with a clean log = check the stop latch (`stabilizer.stop`) before checking power.
+**Where it applies:** `CONFIG_IMU_MOUNT_*` in `espdrone-overrides.sdkconfig`, every new unit or re-mounted GY-521, PLAN.md Session 6.
+
+### 2026-09-12 · Live bench loops: one-round briefs, poll instead of wait, incremental builds — a clean rebuild costs 4-5 min and stalls the bench · Claude Fable 5.1, session 01Qtp5KGh6v7qYUdaPuvsaBS
+
+**What I did:** Ran the IMU-orientation loop with open-ended agent briefs, blocking waits on long captures, and `rm -f sdkconfig && idf.py set-target && idf.py build` for every Kconfig change.
+**What went wrong:** Each full rebuild cost 4-5 minutes; agents told to "investigate" burned many tool rounds before answering; the bench sat idle between rounds while Duane stood by holding the board.
+**Root cause:** The loop is human-paced (tilt the board, read one line). Any step that is not one tool round or one incremental build is wall-clock the human pays for.
+**Rule to follow:** During a live bench loop, brief agents to answer in one tool round; poll for a condition instead of blocking on it; flip the Kconfig value in `sdkconfig` and run `idf.py build` incrementally, saving the clean rebuild for the final tracked state.
+**Where it applies:** every esp-drone build/flash/bench cycle, agent briefs during hardware sessions.
+
 ### 2026-09-11 · LED backend stack overflow: an IDF driver that can ESP_LOGE must not run on a 2 KB ESP-Drone task · Claude Fable 5.1, session 01Qtp5KGh6v7qYUdaPuvsaBS
 
 **What I did:** Wrote the first WS2812 backend so `ledSet` called `rmt_tx_wait_all_done(chan, 0)` + `rmt_transmit` inline, reasoning "zero timeout = non-blocking = safe from any caller".

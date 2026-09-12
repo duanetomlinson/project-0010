@@ -23,8 +23,8 @@ from git archaeology.
 | `step6_motors.py` | test | config, status_led | Per-motor spin, all-four load, nFAULT monitor, status LED. EEP wake only when `MOTOR_SLEEP_DRIVE=True`. |
 | `main.py` | boot | — | All commented out on purpose. |
 | `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
-| `espdrone-overrides.sdkconfig` | config | — | Tracked copy of the Kconfig values appended to `esp-drone/sdkconfig.defaults.esp32s3` (pins, SSID, LED). Every pin the firmware uses is a `CONFIG_*` symbol here. |
-| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c`: setters write `state[]` + notify, a `ws2812Task` owns every RMT call; plus the led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe. |
+| `espdrone-overrides.sdkconfig` | config | — | Tracked copy of the Kconfig values appended to `esp-drone/sdkconfig.defaults.esp32s3` (pins, SSID, LED, IMU mount, bench print). Every pin the firmware uses is a `CONFIG_*` symbol here. |
+| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c`: setters write `state[]` + notify, a `ws2812Task` owns every RMT call; plus the led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, IMU mount remap (`choice IMU_MOUNT` + body-frame negations in the MPU-6050 driver), 1 Hz `ATTITUDE_BENCH_PRINT` line in `stabilizer.c`, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe and the `espfly-0010` commit list. |
 
 ### step6_motors.py logic
 
@@ -477,3 +477,120 @@ output.
 runs the 2026-08-19 build (INT 7, LEDs 11/12/13); its snapshot is PR #4
 (`unit2/board-snapshot`). Identify a board by its USB serial (`ioreg`),
 never by `/dev/cu.*` port number — the numbers change with plug order.
+
+## Session 6 — 2026-09-12 — Controls dead: inverted IMU → tumble kill
+
+**Trigger:** Unit 1 on the Session 5 build boots clean, the AP is up,
+the app connects — but under app control the motors spin for a split
+second and stop. Every attempt ends the same way and the console says
+nothing.
+
+**Root cause (verified in source and on the bench):** the GY-521 on
+unit 1 is mounted upside down (header on the drone's right side, chips
+underneath), so the MPU-6050 reports acc.z = -1 g at rest. The tumble
+detector in `sitaw.c:118-147` counts samples with acc.z <= -0.5 g once
+the motor ratio sum exceeds 1000; 30 consecutive samples at 1 kHz
+(30 ms) declares a tumble and calls `stabilizerSetEmergencyStop()`
+(`stabilizer.c:59,307-310`). The stop is a latch: motors go to zero,
+no log line, cleared only by a reboot or by writing param
+`stabilizer.stop` = 0. A 7-minute passive console capture on unit 1
+showed zero `rst:` lines — not a brownout, not a reset.
+
+**Kill path:**
+
+```
+ GY-521 mounted upside down (unit 1: header on the right, chips underneath)
+      |
+      v
+ MPU-6050 raw: acc.z = -1 g at rest
+      |
+      v
+ sensors_mpu6050_hm5883L_ms5611.c  processAccGyroMeasurements()  (~387-405)
+      |                                ^
+      |                                +-- FIX lands here: CONFIG_IMU_MOUNT_INVERTED_Y
+      |                                    negates acc/gyro x and z after the
+      |                                    register swap -> acc.z = +1 g
+      v
+ sensorData.acc.z = -1.0                              (unfixed build)
+      |
+      v
+ stabilizerTask, 1 kHz  ---->  sitaw.c:118-147 tumble detector
+                                     |
+                       motor ratio sum > 1000 ?    (throttle applied)
+                                     | yes
+                                     v
+                       acc.z <= -0.5 g for 30 samples (30 ms)
+                                     | yes
+                                     v
+                       stabilizerSetEmergencyStop()   stabilizer.c:59,307-310
+                                     |
+                                     v
+                       emergency-stop LATCH -> motors = 0
+                       no log line; cleared only by reboot
+                       or param stabilizer.stop = 0
+```
+
+**Fix (vendor `986bcf9` + `a4a6801` + `3540dbd`; patch v4 =
+`git diff db0f656..3540dbd`, 11 files, reverse-apply checked):**
+
+- `main/Kconfig.projbuild`: `choice IMU_MOUNT` — `IMU_MOUNT_UPRIGHT`
+  (default) / `IMU_MOUNT_INVERTED_X` / `IMU_MOUNT_INVERTED_Y` — plus
+  `ATTITUDE_BENCH_PRINT` (default n).
+- `sensors_mpu6050_hm5883L_ms5611.c` (~lines 387-405): after the
+  existing register swap, negate the body-frame axes for the chosen
+  mount — INVERTED_X: gyro/acc y and z; INVERTED_Y: gyro/acc x and z
+  (a 180° body rotation about the roll or the pitch axis) — before the
+  LPF and align-to-gravity steps.
+- `stabilizer.c`: under `CONFIG_ATTITUDE_BENCH_PRINT`, a 1 Hz
+  `BENCH acc.z=… roll=… pitch=… yaw=…` line on the USB console.
+- `espdrone-overrides.sdkconfig` / `sdkconfig.defaults.esp32s3`: unit 1
+  = `CONFIG_IMU_MOUNT_INVERTED_Y=y`; `CONFIG_ATTITUDE_BENCH_PRINT=n`
+  (flight build, `3540dbd`; the bench runs below were built with `=y`).
+
+**Bench (unit 1, USB, props off, `passive_read4.py` console capture):**
+
+| Build | Level | Nose down | Right side down | Verdict |
+|---|---|---|---|---|
+| INVERTED_X (`42955c4`) | acc.z +1.00 | pitch **+32.8** | roll **-42 … -21** | acc.z fixed, both horizontal signs reversed → wrong axis |
+| INVERTED_Y (`a4a6801`) | acc.z 0.99, roll +5.5, pitch +4.4 | pitch **-26.9** | roll **+34 … +36** | matches the firmware convention |
+
+Reference sign convention, verified in source: nose down ⇒ pitch
+NEGATIVE (`sensfusion6.c:273-274`; `kalman_core.c:1051-1059` legacy
+negation; `controller_pid.c:109` uses `-gyro.y`;
+`power_distribution_stock.c:88-94` adds +pitch on M1/M4 = the front
+motors); right side down ⇒ roll POSITIVE. The geometry guess from the
+header position was wrong twice — only the bench print settled it.
+
+Throttle hold, 5 s, INVERTED_Y build: all four motors ran and held, no
+kill.
+
+**Plan of execution:**
+
+1. [x] Trace the kill from the symptom: `sitaw.c` tumble detector →
+       `stabilizerSetEmergencyStop()` latch; 7-min capture with zero
+       resets rules out brownout.
+2. [x] Vendor `986bcf9`: Kconfig `choice IMU_MOUNT` +
+       `ATTITUDE_BENCH_PRINT`; body-frame negations in the MPU-6050
+       driver; 1 Hz BENCH line in `stabilizer.c`.
+3. [x] Vendor `42955c4`: build + flash INVERTED_X; bench print: acc.z
+       ok, pitch and roll reversed → superseded.
+4. [x] Vendor `a4a6801`: build + flash INVERTED_Y; bench print signs
+       match the reference convention; 5 s throttle hold, all four
+       motors.
+5. [x] Track it in this repo (PR #3): patch v4 (11 files, reverse-apply
+       checked), `espdrone-overrides.sdkconfig` re-synced with the IMU
+       block, `patches/README.md` commit list, CLAUDE.md learnings.
+6. [x] Flight build: `CONFIG_ATTITUDE_BENCH_PRINT=n` in both
+       `esp-drone/sdkconfig.defaults.esp32s3` and
+       `espdrone-overrides.sdkconfig`, clean rebuild done (vendor
+       `3540dbd`). **Built, NOT yet flashed** — unit 1 still runs the
+       `a4a6801` bench build. To flash:
+       `cd esp-drone && idf.py -p /dev/cu.usbmodem<unit-1 port> flash`,
+       then replug USB (the chip parks in download mode after the
+       flash) and confirm no `BENCH` lines in a passive capture.
+7. [ ] BMP280 still absent on unit 1 (Session 5) — wiring check.
+8. [ ] Boot log claims GPIO 34 for the flow-deck CS0 default — harmless
+       (nothing wired there); pin it off in Kconfig if it ever matters.
+9. [ ] Unit 3 discovery is staged only in the job tmp dir (firmware sha
+       `8c6039d4…`, `portmap.py`, `u3_*.py`) — copy somewhere durable
+       before the tmp dir is cleaned.
