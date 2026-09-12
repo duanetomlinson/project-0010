@@ -5,13 +5,15 @@
 `db0f656`. Our source changes to it live in `esp-drone-espfly.patch`;
 our Kconfig values live in `../espdrone-overrides.sdkconfig`. Locally the
 checkout also carries branch `espfly-0010` (commits `491309e` build fixes,
-`2fe79cf` pin map + WS2812) with the same changes committed; the patch is
-`git diff db0f656` of that branch, esp-now vendor copy excluded.
+`2fe79cf` pin map + WS2812, `032d336` LED task fix) with the same changes
+committed; the patch is `git diff db0f656..032d336` of that branch,
+esp-now vendor copy excluded.
 
 What the patch contains:
 
 - `components/drivers/general/led/`: WS2812 status-LED backend
-  (`led_esp32.c` over the IDF v5.0 RMT TX driver, plus
+  (`led_esp32.c` over the IDF v5.0 RMT TX driver — setters write
+  `state[]` and notify a `ws2812Task` that owns every RMT call — plus
   `led_strip_encoder.c/.h` from the IDF `rmt/led_strip` example).
 - `main/Kconfig.projbuild`: new `LED_PIN_WS2812` symbol (default 21).
 - `components/drivers/general/adc/adc_esp32.c`: battery ADC channel

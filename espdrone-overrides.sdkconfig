@@ -43,10 +43,16 @@ CONFIG_MPU_PIN_INT=13
 CONFIG_WIFI_BASE_SSID="ESPFLY-0010"
 
 # Status LED: the onboard WS2812 on GPIO 21 is the ONLY LED on this
-# board. led_esp32.c (patched, see patches/) drives it over RMT and mixes
-# the firmware's three logical LEDs into that one pixel:
+# board. led_esp32.c (patched, see patches/) mixes the firmware's three
+# logical LEDs into that one pixel:
 #   BLUE  = system / link down     GREEN = link up
 #   RED   = charging / low battery / error (cfassert)
+# Backend design: ledSet/ledClearAll/ledSetAll only write state[] and
+# xTaskNotifyGive a dedicated ws2812Task (3072 B stack, prio 1) that
+# owns every RMT call and waits for the previous frame to finish before
+# sending the next. Nothing RMT-related runs on the 2 KB LEDSEQCMD task
+# (the first backend polled the driver inline from ledSet and overflowed
+# it -- PLAN.md Session 5, "Reboot loop + fix").
 # LED_PIN_BLUE/GREEN/RED are no longer read by the backend; they are
 # pinned to the same GPIO so the generated sdkconfig shows no phantom
 # pin claims (their upstream defaults 7/9/8 = MPU INT / SCL / ADC).

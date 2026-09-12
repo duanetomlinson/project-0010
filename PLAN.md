@@ -24,7 +24,7 @@ from git archaeology.
 | `main.py` | boot | — | All commented out on purpose. |
 | `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
 | `espdrone-overrides.sdkconfig` | config | — | Tracked copy of the Kconfig values appended to `esp-drone/sdkconfig.defaults.esp32s3` (pins, SSID, LED). Every pin the firmware uses is a `CONFIG_*` symbol here. |
-| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c` + RMT led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe. |
+| `patches/esp-drone-espfly.patch` | patch | esp-drone @ db0f656 | Source changes to the git-ignored `esp-drone/` vendor tree: WS2812 LED backend (`led_esp32.c`: setters write `state[]` + notify, a `ws2812Task` owns every RMT call; plus the led_strip encoder), `LED_PIN_WS2812` Kconfig symbol, ADC channel fix, esp-now pin. `patches/README.md` has the re-apply recipe. |
 
 ### step6_motors.py logic
 
@@ -340,18 +340,25 @@ must be a Kconfig symbol, and the vendor-tree changes must be recoverable
   compile as-is. The three logical LEDs are on/off bits mixed into one
   GRB pixel at brightness 32/255: BLUE = system / link down, GREEN =
   link up, RED = charge / low battery / assert.
-- `ledSet` never blocks: `cfassert.c` calls it after
-  `portDISABLE_INTERRUPTS()`. The backend asks
-  `rmt_tx_wait_all_done(chan, 0)` and skips the frame if the previous
-  one is still on the wire. Known consequence: on an assert only the
-  first frame (all off) is guaranteed to reach the LED; the console
-  "Assert failed" line is the real signal.
+- `ledSet` never blocks and never touches the RMT driver: it writes
+  `state[]` and `xTaskNotifyGive`s a dedicated `ws2812Task` (3072 B
+  stack, prio 1) that owns every RMT call and blocks until the previous
+  ~80 µs frame has left the wire before sending the next. A burst of
+  `ledSet` calls collapses into one frame. (The first backend polled
+  `rmt_tx_wait_all_done(chan, 0)` inline from `ledSet`; that overflowed
+  the 2 KB LEDSEQCMD task — see "Reboot loop + fix" below.)
+  `cfassert.c` calls `ledSet` after `portDISABLE_INTERRUPTS()`: the
+  notify is harmless there, but the task cannot run, so the frame may
+  never reach the LED; the console "Assert failed" line is the real
+  signal. Documented in the `led_esp32.c` file header; `led.h` untouched.
 - `CONFIG_LED_PIN_BLUE/GREEN/RED` are kept as symbols (upstream Kconfig)
   but pinned to 21 in the overrides so the generated `sdkconfig` shows no
   phantom claims on 7/9/8; the backend does not read them.
 - The vendor tree gets a local branch `espfly-0010` (from upstream
-  `db0f656`) with everything committed, and the tracked delta lives in
-  `patches/esp-drone-espfly.patch` (esp-now vendor copy excluded — it is
+  `db0f656`) with everything committed — `491309e` build fixes,
+  `2fe79cf` pin map + first WS2812 backend, `032d336` LED task fix — and
+  the tracked delta lives in `patches/esp-drone-espfly.patch`
+  (`git diff db0f656..032d336`, esp-now vendor copy excluded — it is
   re-vendored, not patched).
 
 **LED path:**
@@ -362,13 +369,22 @@ must be a Kconfig symbol, and the vendor-tree changes must be recoverable
       +---------- ledSet(led, on) / ledClearAll / ledSetAll ----------+
                              |
                              v
-                   state[3]  {BLUE, RED, GREEN}      (led_esp32.c)
+                   state[3]  {BLUE, RED, GREEN}      (led_esp32.c: a store, nothing else
+                             |                        on the caller's stack)
+                             v
+                   xTaskNotifyGive(ws2812Task)       (a burst of calls = one notification)
                              |
+   - - - - - - - - - - - - - | - - - - - - - - - - - - - - -  task boundary
+                             v
+                   ws2812Task  (3072 B stack, prio 1, owns every RMT call)
+                     ulTaskNotifyTake(portMAX_DELAY)
+                             |
+                             v
+                   rmt_tx_wait_all_done(chan, -1)    (block until the previous
+                             |                        ~80 us frame is done)
                              v
                    pixel[3] = {G, R, B}  each 0 or 32
                              |
-              rmt_tx_wait_all_done(chan, 0) busy? --yes--> skip frame
-                             | no
                              v
                    rmt_transmit(led_strip encoder)
                              |
@@ -397,12 +413,67 @@ must be a Kconfig symbol, and the vendor-tree changes must be recoverable
        (patch = upstream db0f656 -> working tree, verified by re-applying
        to pristine copies; 9 files, esp-now vendor copy excluded).
 6b. [x] Nested repo: branch `espfly-0010` from `db0f656`, tree clean —
-       `491309e` (Aug build fixes: ADC channel, esp-now 2.1.1 vendored)
-       and `2fe79cf` (pin map + WS2812 backend). Local only, never pushed.
-7. [ ] Flash (user, not automated): `cd esp-drone && idf.py -p <port>
-       flash`, then RESET button or USB replug (software reset parks the
-       S3 in download mode — see CLAUDE.md Learnings). Verify via the USB
-       console: `MPU6050 [OK]`, `gpio:` lines claim only 1/2/3/4, 9/10,
-       13, 8, 21; WS2812 shows blue after self-test, green on link.
-8. [ ] Bench: re-verify the INT edge count on GPIO 13 (was 101/s on
-       GPIO 7) from the boot log / step3 before trusting the sensor task.
+       `491309e` (Aug build fixes: ADC channel, esp-now 2.1.1 vendored),
+       `2fe79cf` (pin map + first WS2812 backend), `032d336` (LED task
+       fix, 2026-09-11). Local only, never pushed. Patch regenerated as
+       `git diff db0f656..032d336` (9 files, reverse-apply checked).
+7. [x] 2026-09-11 — Flashed unit 1 (USB serial 3C:0F:02:E4:D8:4C).
+       First build (`2fe79cf`) reboot-looped every 10.5 s with a
+       LEDSEQCMD stack overflow; re-flashed with `032d336` at ~23:31.
+       After the USB replug at 23:45 a 75 s passive serial capture
+       shows 0 `rst:`, 0 overflow, 0 `rmt:` lines; AP
+       `ESPFLY-0010_3C0F02E4D84D` visible on channel 6. Details under
+       "Reboot loop + fix" below. Not re-checked in this pass: the
+       `gpio:` claim lines and the LED colour sequence by eye.
+8. [x] 2026-09-11 — INT on GPIO 13 = 100 edges/s at the 100 Hz sample
+       rate (live MicroPython check on unit 1 before the flash; MPU-6050
+       at 0x68 on SDA 10 / SCL 9). The pin the firmware reads carries
+       the data-ready edge; no reset in the 75 s firmware capture.
+
+### Reboot loop + fix — 2026-09-11
+
+The first Session 5 build on unit 1 rebooted every ~10.5 s with
+`***ERROR*** A stack overflow in task LEDSEQCMD has been detected`
+(capture `boot3.raw`). Root cause, verified in the vendor tree and the
+IDF v5.0 source:
+
+1. LEDSEQCMD's stack is `2 * CONFIG_BASE_STACK_SIZE` = 2048 B
+   (`components/config/include/config.h:152`); only ~1332 B are free
+   at idle.
+2. The first WS2812 backend called `rmt_tx_wait_all_done(chan, 0)`
+   inline from `ledSet`. In IDF v5.0 (`rmt_tx.c:540`) a zero timeout
+   fails whenever the previous ~80 µs frame is still in flight — it
+   drops the frame AND runs `ESP_LOGE("flush timeout")` on the caller's
+   stack.
+3. At `systemStart` ledseq issues back-to-back `ledSet` calls; the
+   second one landed on that ESP_LOGE/vprintf path inside LEDSEQCMD and
+   overflowed it -> reboot every 10.5 s.
+4. Fix (vendor `032d336`, patch v2): setters only write `state[3]` +
+   `xTaskNotifyGive`; a `ws2812Task` (3072 B, prio 1) owns every RMT
+   call and waits with a blocking timeout. No polling, no rmt log
+   lines; bursts collapse into one frame.
+5. cfassert path: the notify is harmless (interrupts off = critical
+   section), the task cannot run, the frame may not go out — accepted
+   and documented in the `led_esp32.c` header. `led.h` untouched.
+
+**Flash / boot record (unit 1, USB serial 3C:0F:02:E4:D8:4C):**
+
+| Time (2026-09-11) | Action | Result |
+|---|---|---|
+| ~23:15 | erase + flash first Session 5 build | reboot loop, LEDSEQCMD overflow (`boot3.raw`) |
+| ~23:31 | re-flash with `032d336` | chip parked in download mode after `idf.py flash` (expected over USB-JTAG) |
+| 23:45 | USB replug, 75 s passive capture (port opened with DTR/RTS asserted, no reset) | 0 `rst:`, 0 overflow, 0 `rmt:` |
+| after | WiFi scan | AP `ESPFLY-0010_3C0F02E4D84D` on channel 6 |
+
+**Same unit, live MicroPython pin check (before the flash):** I2C on
+SDA 10 / SCL 9 confirmed (MPU-6050 answers at 0x68); **BMP280 ABSENT**
+at 0x76 and 0x77 — wiring check pending; esp-drone ignores it, the
+MicroPython `step4_baro` test cannot pass on this unit until it is
+found. MPU INT on GPIO 13 = 100 edges/s. GPIO 6 (nSLEEP) held HIGH by
+the module; GPIO 5 (nFAULT) readings consistent with an open-drain
+output.
+
+**Two units on the bench:** unit 2 (USB serial 3C:0F:02:E4:DD:18) still
+runs the 2026-08-19 build (INT 7, LEDs 11/12/13); its snapshot is PR #4
+(`unit2/board-snapshot`). Identify a board by its USB serial (`ioreg`),
+never by `/dev/cu.*` port number — the numbers change with plug order.

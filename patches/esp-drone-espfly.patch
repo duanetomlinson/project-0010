@@ -35,10 +35,10 @@ index d525c53..09aecc2 100644
 \ No newline at end of file
 +                       REQUIRES crazyflie platform driver)
 diff --git a/components/drivers/general/led/led_esp32.c b/components/drivers/general/led/led_esp32.c
-index 3eea3f4..9990c21 100644
+index 3eea3f4..c2190b4 100644
 --- a/components/drivers/general/led/led_esp32.c
 +++ b/components/drivers/general/led/led_esp32.c
-@@ -17,56 +17,106 @@
+@@ -17,56 +17,133 @@
   * You should have received a copy of the GNU General Public License
   * along with this program. If not, see <http://www.gnu.org/licenses/>.
   *
@@ -48,12 +48,29 @@ index 3eea3f4..9990c21 100644
 + * The board has one WS2812 on CONFIG_LED_PIN_WS2812 and no discrete LEDs.
 + * The three logical LEDs the rest of the firmware talks to (led.h:
 + * LED_BLUE = system, LED_GREEN = link, LED_RED = charge/low-bat/error)
-+ * are kept as on/off state and mixed, additively, into that one pixel:
++ * are kept as on/off state and mixed, additively, into that one pixel.
 + *
-+ *   ledseq / system / cfassert
-+ *          |  ledSet(led, on)
-+ *          v
-+ *   state[LED_NUM] --> pixel {G,R,B} --> rmt_transmit --> WS2812 data line
++ * The setters never touch the RMT driver. They only update state[] and
++ * notify a small dedicated task that owns every RMT call:
++ *
++ *   ledseq / system / cfassert          WS2812 task (this file)
++ *          |  ledSet(led, on)                 |
++ *          v                                  v
++ *   state[LED_NUM] --notify--> ulTaskNotifyTake() --> rmt_tx_wait_all_done()
++ *                                                   --> pixel {G,R,B}
++ *                                                   --> rmt_transmit() --> data line
++ *
++ * Why a task: rmt_transmit() can block, and rmt_tx_wait_all_done() logs
++ * an ESP_LOGE on timeout. Both need more stack than the 2 KB LEDSEQCMD
++ * task (config.h) and the ledseq timer callback can spare; calling them
++ * from ledSet() overflowed LEDSEQCMD. Several ledSet() calls in a burst
++ * collapse into one notification; the task always sends the latest state.
++ *
++ * Assert path: cfassert.c calls ledClearAll()/ledSet() with interrupts
++ * disabled and then never returns. The notify is harmless there (it is
++ * just a critical section), but the task cannot run, so the frame does
++ * not reach the LED. That is accepted; the assert is reported over the
++ * console.
   */
  #include <stdbool.h>
 +#include <stdint.h>
@@ -80,52 +97,56 @@ index 3eea3f4..9990c21 100644
 -};
 +#define LED_RMT_RESOLUTION_HZ 10000000  /* 10 MHz = 0.1 us ticks, the WS2812 bit timing needs this */
 +#define LED_BRIGHTNESS        32        /* 0..255 per colour; modest so the status LED is not blinding */
- 
-+static const char *TAG = "led";
++#define LED_TASK_NAME         "WS2812"
++#define LED_TASK_STACKSIZE    3072      /* rmt_transmit + encoder + a possible ESP_LOGE fit here */
++#define LED_TASK_PRI          1         /* same as LEDSEQCMD; the LED is not time critical */
 +
++static const char *TAG = "led";
+ 
 +static rmt_channel_handle_t led_chan = NULL;
 +static rmt_encoder_handle_t led_encoder = NULL;
++static TaskHandle_t led_task = NULL;
 +static bool state[LED_NUM];
-+static uint8_t pixel[3];     /* static: the RMT driver reads it after rmt_transmit() returns */
++static uint8_t pixel[3];     /* only the WS2812 task touches this; the RMT driver reads it after rmt_transmit() returns */
  static bool isInit = false;
  
 -//Initialize the green led pin as output
 -void ledInit()
-+/*
-+ * Compose the WS2812 pixel from the logical LED states and send it.
-+ *
-+ * MUST NOT BLOCK: cfassert.c calls ledClearAll()/ledSet() after
-+ * portDISABLE_INTERRUPTS() and before powerStop(). rmt_transmit() only
-+ * blocks when no transaction slot is free, so first ask
-+ * rmt_tx_wait_all_done() with a ZERO timeout to recycle finished
-+ * transfers; if one is still in flight, skip this frame and let the
-+ * next ledSet() catch up. Never spin here. (Consequence in the assert
-+ * path: with interrupts off the driver cannot mark the first frame
-+ * done, so only ledClearAll()'s "all off" frame reaches the LED.)
-+ */
++/* Tell the WS2812 task that state[] changed. Safe from any task context. */
 +static void ledShow(void)
  {
 -    int i;
-+    if (!isInit) {
-+        return;
++    if (led_task != NULL) {
++        xTaskNotifyGive(led_task);
 +    }
++}
 +
-+    /* WS2812 wire order is G, R, B */
-+    pixel[0] = state[LED_GREEN] ? LED_BRIGHTNESS : 0;
-+    pixel[1] = state[LED_RED]   ? LED_BRIGHTNESS : 0;
-+    pixel[2] = state[LED_BLUE]  ? LED_BRIGHTNESS : 0;
-+
-+    if (rmt_tx_wait_all_done(led_chan, 0) != ESP_OK) {
-+        return;  /* previous frame still on the wire: skip, do not block */
-+    }
-+
++/*
++ * The only place that talks to the RMT driver. Waits for a change, waits
++ * for the previous frame to leave the wire (recycling its descriptor),
++ * then builds and sends one pixel from the current state.
++ */
++static void ws2812Task(void *param)
++{
 +    rmt_transmit_config_t tx_config = {
 +        .loop_count = 0,
 +    };
-+    rmt_transmit(led_chan, led_encoder, pixel, sizeof(pixel), &tx_config);
-+}
++
++    while (1) {
++        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
++
++        rmt_tx_wait_all_done(led_chan, -1);  /* -1 = wait forever; a frame is ~80 us */
++
++        /* WS2812 wire order is G, R, B */
++        pixel[0] = state[LED_GREEN] ? LED_BRIGHTNESS : 0;
++        pixel[1] = state[LED_RED]   ? LED_BRIGHTNESS : 0;
++        pixel[2] = state[LED_BLUE]  ? LED_BRIGHTNESS : 0;
  
-+//Initialize the WS2812 RMT channel and switch every logical LED off
++        rmt_transmit(led_chan, led_encoder, pixel, sizeof(pixel), &tx_config);
++    }
++}
++
++//Initialize the WS2812 RMT channel, start its task and switch every logical LED off
 +void ledInit()
 +{
      if (isInit) {
@@ -151,7 +172,7 @@ index 3eea3f4..9990c21 100644
 +        .gpio_num = CONFIG_LED_PIN_WS2812,
 +        .mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL,  /* one block; a pixel is 24 symbols + reset */
 +        .resolution_hz = LED_RMT_RESOLUTION_HZ,
-+        .trans_queue_depth = 1,  /* one frame in flight at a time; see ledShow() */
++        .trans_queue_depth = 1,  /* one frame in flight at a time; see ws2812Task() */
 +    };
 +    led_strip_encoder_config_t encoder_config = {
 +        .resolution = LED_RMT_RESOLUTION_HZ,
@@ -164,8 +185,14 @@ index 3eea3f4..9990c21 100644
 +    if (err == ESP_OK) {
 +        err = rmt_enable(led_chan);
 +    }
++    if (err == ESP_OK) {
++        if (xTaskCreate(ws2812Task, LED_TASK_NAME, LED_TASK_STACKSIZE, NULL, LED_TASK_PRI, &led_task) != pdPASS) {
++            led_task = NULL;
++            err = ESP_ERR_NO_MEM;
++        }
++    }
 +    if (err != ESP_OK) {
-+        ESP_LOGE(TAG, "WS2812 on GPIO %d: RMT init failed (%s)", CONFIG_LED_PIN_WS2812, esp_err_to_name(err));
++        ESP_LOGE(TAG, "WS2812 on GPIO %d: init failed (%s)", CONFIG_LED_PIN_WS2812, esp_err_to_name(err));
 +        return;  /* isInit stays false: ledTest() reports the failure */
      }
  
@@ -174,7 +201,7 @@ index 3eea3f4..9990c21 100644
  }
  
  bool ledTest(void)
-@@ -89,9 +139,9 @@ void ledClearAll(void)
+@@ -89,9 +166,9 @@ void ledClearAll(void)
      int i;
  
      for (i = 0; i < LED_NUM; i++) {
@@ -186,7 +213,7 @@ index 3eea3f4..9990c21 100644
  }
  
  void ledSetAll(void)
-@@ -99,25 +149,17 @@ void ledSetAll(void)
+@@ -99,25 +176,17 @@ void ledSetAll(void)
      int i;
  
      for (i = 0; i < LED_NUM; i++) {
