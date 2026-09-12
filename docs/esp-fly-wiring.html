@@ -8,11 +8,13 @@
 <!--
   ESP-FLY interactive wiring page. Single file, no network dependencies.
 
-  SOURCE OF TRUTH FOR EVERY PIN: config.py (branch mvp-dual-drv8833).
+  SOURCE OF TRUTH FOR EVERY PIN: config.py (as-built map, user-confirmed 2026-09-11).
     I2C pins      verified by pull-up sweep + bus scan     2026-08-16
     motor corners verified by single-pin isolation runs    2026-08-19
-    MPU INT       verified live, 101 rising edges/s        2026-08-19
-    EEP (GPIO5)   measured externally held HIGH            2026-08-19
+    MPU INT       GPIO13 per as-built map                  2026-09-11
+    ULT / EEP     GPIO5 = nFAULT, GPIO6 = nSLEEP           2026-09-11
+                  (the 2026-08-19 "GPIO5 held HIGH" reading is thought to be
+                  nFAULT's own pull-up -- confirm on the bench before driving EEP)
   Board rail order: Waveshare ESP32-S3-Zero pin-definition image, 2026-09-11.
 
   How it is built (read top to bottom):
@@ -82,7 +84,7 @@
 <header>
   <h1>ESP-FLY wiring — as built</h1>
   <span>Waveshare ESP32-S3-Zero · 2× DRV8833 · MPU-6050 · BMP280 · pins from <code>config.py</code> (branch mvp-dual-drv8833)</span>
-  <span>verified: I2C by pull-up sweep + scan 2026-08-16 · motor corners by single-pin isolation 2026-08-19 · MPU INT 101 edges/s 2026-08-19 · rail order from Waveshare S3-Zero pin-definition image 2026-09-11</span>
+  <span>verified: I2C by pull-up sweep + scan 2026-08-16 · motor corners by single-pin isolation 2026-08-19 · MPU INT on GPIO13, ULT 5 / EEP 6 per as-built map 2026-09-11 · rail order from Waveshare S3-Zero pin-definition image 2026-09-11</span>
 </header>
 
 <main>
@@ -112,11 +114,11 @@
         <span class="sw" style="background:var(--c-rr)"></span>GPIO2 PWM · M2 rear-right
         <span class="sw" style="background:var(--c-fl)"></span>GPIO3 PWM · M4 front-left
         <span class="sw" style="background:var(--c-rl)"></span>GPIO4 PWM · M3 rear-left
-        <span class="sw" style="background:var(--c-eep)"></span>GPIO5 EEP / nSLEEP (Y-spliced)
-        <span class="sw dash"></span>GPIO6 ULT / nFAULT (Y-spliced)
-        <span class="sw" style="background:var(--c-int)"></span>GPIO7 MPU INT
+        <span class="sw dash"></span>GPIO5 ULT / nFAULT (Y-spliced)
+        <span class="sw" style="background:var(--c-eep)"></span>GPIO6 EEP / nSLEEP (Y-spliced)
         <span class="sw" style="background:var(--c-scl)"></span>GPIO9 I2C SCL
         <span class="sw" style="background:var(--c-sda)"></span>GPIO10 I2C SDA
+        <span class="sw" style="background:var(--c-int)"></span>GPIO13 MPU INT
       </div>
     </div>
     <div class="group">
@@ -151,8 +153,8 @@ Zero 3V3(OUT) ── MPU-6050 VCC + BMP280 VCC only</pre>
     <ul>
       <li><b>PROPS OFF.</b> Every run is live — even on USB. Area clear.</li>
       <li>IN2 + IN4 jumpered to each module's own GND pad (one GPIO per motor, fast decay).</li>
-      <li>Do <b>not</b> drive GPIO5 (EEP) as an output: measured held HIGH externally; drivers are always awake.</li>
-      <li>GPIO6 (ULT) read with the ESP32 internal pull-up; LOW = fault.</li>
+      <li>GPIO5 (ULT / nFAULT) read with the ESP32 internal pull-up; LOW = fault.</li>
+      <li>Do <b>not</b> drive GPIO6 (EEP / nSLEEP) as an output until the bench confirms the 5/6 swap; <code>MOTOR_SLEEP_DRIVE</code> stays <code>False</code> in <code>config.py</code>.</li>
       <li>Sensors on 3V3(OUT) only, never on 5V or battery.</li>
       <li>No continuity BAT+ to BAT− after all joints; JST polarity metered.</li>
       <li>One power source at a time (USB <i>or</i> battery / boost).</li>
@@ -164,7 +166,7 @@ Zero 3V3(OUT) ── MPU-6050 VCC + BMP280 VCC only</pre>
       <li>USB only → <code>import step2_scan</code> → expect <b>[104, 118]</b> (0x68, 0x76).</li>
       <li>USB only, props off → <code>import step6_motors</code> → each corner solo, then all four; watch nFAULT.</li>
       <li>Confirm spin by eye: FR + RL = CCW, RR + FL = CW.</li>
-      <li>ESP-Drone build: pins in <code>espdrone-overrides.sdkconfig</code> match this page (MOTOR01=1, 02=2, 03=4, 04=3, SDA=10, SCL=9, MPU INT=7).</li>
+      <li>ESP-Drone build: pins in <code>espdrone-overrides.sdkconfig</code> must match this page (MOTOR01=1, 02=2, 03=4, 04=3, SDA=10, SCL=9, MPU INT=13) — re-sync the overrides if they still say INT=7.</li>
     </ol>
   </div>
 </div>
@@ -188,17 +190,17 @@ const PINS = {
   'GP2': { x:430, y:330, side:'L', gpio:'GPIO2',  alt:'M2 RR' },
   'GP3': { x:430, y:370, side:'L', gpio:'GPIO3',  alt:'M4 FL' },
   'GP4': { x:430, y:410, side:'L', gpio:'GPIO4',  alt:'M3 RL' },
-  'GP5': { x:430, y:450, side:'L', gpio:'GPIO5',  alt:'EEP nSLEEP' },
-  'GP6': { x:430, y:490, side:'L', gpio:'GPIO6',  alt:'ULT nFAULT' },
+  'GP5': { x:430, y:450, side:'L', gpio:'GPIO5',  alt:'ULT nFAULT' },
+  'GP6': { x:430, y:490, side:'L', gpio:'GPIO6',  alt:'EEP nSLEEP' },
   'TX':  { x:670, y:170, side:'R', gpio:'GPIO43', alt:'U0TX' },
   'RX':  { x:670, y:210, side:'R', gpio:'GPIO44', alt:'U0RX' },
-  'GP13':{ x:670, y:250, side:'R', gpio:'GPIO13', alt:'free' },
+  'GP13':{ x:670, y:250, side:'R', gpio:'GPIO13', alt:'MPU INT' },
   'GP12':{ x:670, y:290, side:'R', gpio:'GPIO12', alt:'free' },
   'GP11':{ x:670, y:330, side:'R', gpio:'GPIO11', alt:'free' },
   'GP10':{ x:670, y:370, side:'R', gpio:'GPIO10', alt:'SDA' },
   'GP9': { x:670, y:410, side:'R', gpio:'GPIO9',  alt:'SCL' },
   'GP8': { x:670, y:450, side:'R', gpio:'GPIO8',  alt:'free' },
-  'GP7': { x:670, y:490, side:'R', gpio:'GPIO7',  alt:'MPU INT' },
+  'GP7': { x:670, y:490, side:'R', gpio:'GPIO7',  alt:'free' },
 };
 
 // ----------------------------------------------------------------------
@@ -262,8 +264,8 @@ function buildWires() {
   jumper('mod1', 'IN2', 'short jumper to this module GND pad (fast decay)');
   add('mod1', 'IN3', 'GP2', 'M2 RR PWM', '--c-rr',  ['mod1','motors'], 'M2 rear-right, spins CW', routeLeft);
   jumper('mod1', 'IN4', 'short jumper to this module GND pad (fast decay)');
-  add('mod1', 'EEP', 'GP5', 'nSLEEP',    '--c-eep', ['mod1','ctrl'],   'nSLEEP, Y-spliced with Mod2 · held HIGH externally — do not drive', routeLeft);
-  add('mod1', 'ULT', 'GP6', 'nFAULT',    '--c-ult', ['mod1','ctrl'],   'nFAULT, Y-spliced with Mod2 · open-drain, LOW = fault, needs internal pull-up', routeLeft);
+  add('mod1', 'EEP', 'GP6', 'nSLEEP',    '--c-eep', ['mod1','ctrl'],   'nSLEEP, Y-spliced with Mod2 · do not drive until the 5/6 swap is bench-confirmed', routeLeft);
+  add('mod1', 'ULT', 'GP5', 'nFAULT',    '--c-ult', ['mod1','ctrl'],   'nFAULT, Y-spliced with Mod2 · open-drain, LOW = fault, needs internal pull-up', routeLeft);
   add('mod1', 'VCC', '5V',  '5V',        '--c-5v',  ['mod1','power'],  'motor supply from the BAT+ star', routeLeft);
   add('mod1', 'GND', 'GND', 'GND',       '--c-gnd', ['mod1','power'],  'BAT− star', routeLeft);
 
@@ -272,8 +274,8 @@ function buildWires() {
   jumper('mod2', 'IN2', 'short jumper to this module GND pad (fast decay)');
   add('mod2', 'IN3', 'GP4', 'M3 RL PWM', '--c-rl',  ['mod2','motors'], 'M3 rear-left, spins CCW', routeLeft);
   jumper('mod2', 'IN4', 'short jumper to this module GND pad (fast decay)');
-  add('mod2', 'EEP', 'GP5', 'nSLEEP',    '--c-eep', ['mod2','ctrl'],   'nSLEEP, Y-spliced with Mod1', routeLeft);
-  add('mod2', 'ULT', 'GP6', 'nFAULT',    '--c-ult', ['mod2','ctrl'],   'nFAULT, Y-spliced with Mod1', routeLeft);
+  add('mod2', 'EEP', 'GP6', 'nSLEEP',    '--c-eep', ['mod2','ctrl'],   'nSLEEP, Y-spliced with Mod1', routeLeft);
+  add('mod2', 'ULT', 'GP5', 'nFAULT',    '--c-ult', ['mod2','ctrl'],   'nFAULT, Y-spliced with Mod1', routeLeft);
   add('mod2', 'VCC', '5V',  '5V',        '--c-5v',  ['mod2','power'],  'motor supply from the BAT+ star', routeLeft);
   add('mod2', 'GND', 'GND', 'GND',       '--c-gnd', ['mod2','power'],  'BAT− star', routeLeft);
 
@@ -282,7 +284,7 @@ function buildWires() {
   add('mpu', 'GND', 'GND', 'GND',     '--c-gnd', ['mpu','sensors'], '', (x, y, p) => routeOverTop(x, y, p, 24));
   add('mpu', 'SCL', 'GP9', 'I2C SCL', '--c-scl', ['mpu','sensors'], 'shared bus, 400 kHz', routeRight);
   add('mpu', 'SDA', 'GP10','I2C SDA', '--c-sda', ['mpu','sensors'], 'shared bus', routeRight);
-  add('mpu', 'INT', 'GP7', 'MPU INT', '--c-int', ['mpu','sensors'], 'data-ready rising edge · ESP-Drone blocks on it', routeRight);
+  add('mpu', 'INT', 'GP13', 'MPU INT', '--c-int', ['mpu','sensors'], 'data-ready rising edge · ESP-Drone blocks on it', routeRight);
   jumper('mpu', 'AD0', 'AD0 → GND = address 0x68');
 
   // BMP280
@@ -434,11 +436,11 @@ function renderWarnings() {
   out.push('<div><b>PROPS OFF</b> for every motor test. The 5V pin is the USB VBUS rail, so <b>motors spin on USB alone</b> (verified 2026-08-18). There is no unpowered dry run.</div>');
   if (state.power === 'both')
     out.push('<div><b>USB + battery together is UNVERIFIED.</b> Without a diode between VBUS and the 5V pin, USB pushes charge current into the pack. Pick one source.</div>');
-  out.push('<div><b>EEP / nSLEEP (GPIO5) is held HIGH externally</b> (measured 2026-08-19; J1 not soldered on either module — suspect the 5/6 wires are swapped). Drivers are always awake. <b>Do not drive GPIO5 as an output</b> until resolved.</div>');
+  out.push('<div><b>EEP / nSLEEP is on GPIO6, ULT / nFAULT on GPIO5</b> (as-built map 2026-09-11; the first bring-up notes had them swapped). Hypothesis to confirm on the bench: the 2026-08-19 "GPIO5 held HIGH" reading was nFAULT\'s own pull-up, not a stuck EEP. Until traced at the modules, <b>do not drive GPIO6 as an output</b> — <code>MOTOR_SLEEP_DRIVE = False</code> in config.py.</div>');
   const usage = pinUsage(buildWires());
   for (const [pin, nets] of Object.entries(usage))
     if (nets.size > 1) out.push(`<div><b>Pin conflict:</b> ${pin} carries ${[...nets].join(' + ')}. Fix config.py.</div>`);
-  out.push('<div class="info">ULT / nFAULT (GPIO6) is open-drain, active LOW. Enable the ESP32 internal pull-up; HIGH = healthy.</div>');
+  out.push('<div class="info">ULT / nFAULT (GPIO5) is open-drain, active LOW. Enable the ESP32 internal pull-up; HIGH = healthy.</div>');
   out.push('<div class="info">GPIO3 is a strapping pin (JTAG select) but safe as M4 PWM: sampled only at reset, JTAG_SEL eFuse not burned, DRV8833 input pulldown keeps it defined at boot.</div>');
   out.push('<div class="info">Sensors run from <b>3V3(OUT)</b> only. Both breakouts carry pull-ups; two sets in parallel is fine.</div>');
   out.push('<div class="info">All grounds meet at the star. IN2 and IN4 are jumpered to <b>each module\'s own GND pad</b> — one GPIO per motor, PWM high = drive, low = coast.</div>');
@@ -454,7 +456,7 @@ function updatePrompt() {
     return `${w.pad}→${pin}${w.note ? ' (' + w.note + ')' : ''}`;
   }).join('; ');
   const L = [];
-  L.push('ESP-FLY wiring spec — pins from config.py (branch mvp-dual-drv8833); board = Waveshare ESP32-S3-Zero.');
+  L.push('ESP-FLY wiring spec — pins from config.py (as-built map 2026-09-11); board = Waveshare ESP32-S3-Zero.');
   L.push('Rails (USB at top): left = 5V, GND, 3V3(OUT), GP1–GP6; right = TX, RX, GP13, GP12, GP11, GP10, GP9, GP8, GP7.');
   L.push('• DRV8833 Mod1 (right side): ' + line('mod1') + '.');
   L.push('• DRV8833 Mod2 (left side): ' + line('mod2') + '.');
@@ -463,7 +465,7 @@ function updatePrompt() {
   L.push('• Power: ' + line('star') + '. BAT+ star also feeds Mod1 VCC + Mod2 VCC; BAT− star feeds Mod1 GND + Mod2 GND + sensor GNDs.');
   L.push('• Onboard, nothing to solder: GPIO21 WS2812 status LED; GPIO19/20 native USB.');
   L.push(`Power source: ${{ usb: 'USB only', battery: 'battery only', both: 'USB + battery — ⚠ UNVERIFIED, possible back-feed into the pack' }[state.power]}.`);
-  L.push('Rules: props off for every motor run (live even on USB); never drive GPIO5 as an output while it is held high externally; read GPIO6 with the internal pull-up; sensors on 3V3 only.');
+  L.push('Rules: props off for every motor run (live even on USB); read GPIO5 (nFAULT) with the internal pull-up; do not drive GPIO6 (EEP) as an output until the 5/6 swap is bench-confirmed; sensors on 3V3 only.');
   document.getElementById('prompt').textContent = L.join('\n');
 }
 

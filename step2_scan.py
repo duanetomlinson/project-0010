@@ -7,8 +7,8 @@ Wire BOTH sensors to the SAME two pins:
     ----------------          ------
     VCC -> 3V3                VCC -> 3V3
     GND -> GND                GND -> GND
-    SDA -> GPIO 8             SDA/SDI -> GPIO 8
-    SCL -> GPIO 9             SCL/SCK -> GPIO 9
+    SDA -> GPIO 10            SDA/SDI -> GPIO 10   (config.I2C_SDA)
+    SCL -> GPIO 9             SCL/SCK -> GPIO 9    (config.I2C_SCL)
     AD0 -> GND (or leave)     SDO -> GND (or leave)
 
 I2C is a BUS. Both devices share the same wires and are told apart

@@ -35,8 +35,9 @@ fine at these wire lengths — it just makes the pull-up stiffer.
 3, 45, 46 (strapping); 19, 20 (native USB); 21 (WS2812 LED); 26–32 (flash).
 GPIO 33–37 aren't broken out at all on this board.
 
-As-built pin map (from `config.py`): motors on GPIO 1–4, EEP 5, ULT 6,
-MPU INT 7, I2C on 9/10. Interactive diagram of every wire, both DRV8833
+As-built pin map (from `config.py`, confirmed 2026-09-11): motors on
+GPIO 1–4, ULT/nFAULT 5, EEP/nSLEEP 6, I2C on 9/10, MPU INT 13, onboard
+WS2812 status LED on 21. Interactive diagram of every wire, both DRV8833
 modules and the power star: open **`docs/esp-fly-wiring.html`** in a
 browser (single file, no network needed).
 
@@ -80,6 +81,7 @@ Or use Thonny → Interpreter → MicroPython (ESP32) → select port.
 
 ```bash
 mpremote connect /dev/cu.usbmodem1101 fs cp config.py :
+mpremote connect /dev/cu.usbmodem1101 fs cp status_led.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp mpu6050.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp bmp280.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp step1_hello.py :
@@ -87,6 +89,7 @@ mpremote connect /dev/cu.usbmodem1101 fs cp step2_scan.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp step3_imu.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp step4_baro.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp step5_combined.py :
+mpremote connect /dev/cu.usbmodem1101 fs cp step6_motors.py :
 mpremote connect /dev/cu.usbmodem1101 fs cp main.py :
 ```
 
@@ -119,6 +122,7 @@ boot, so leaving a test loop in it means fighting the board for the REPL.
 | File | Type | What it does |
 |------|------|--------------|
 | `config.py` | config | Pins and addresses. **Edit here, nowhere else.** |
+| `status_led.py` | library | Onboard WS2812 (GPIO 21): `show("boot"/"ok"/"fault"/"motor_test")`, `set_color(r,g,b)`, `off()`. |
 | `mpu6050.py` | library | IMU driver. Nothing runs on import. |
 | `bmp280.py` | library | Barometer driver + Bosch compensation math. |
 | `step1_hello.py` | test | Board info + LED blink. |
@@ -126,7 +130,7 @@ boot, so leaving a test loop in it means fighting the board for the REPL.
 | `step3_imu.py` | test | Gyro calibration, live stream, six-orientation test. |
 | `step4_baro.py` | test | Chip ID, noise check, 1m lift test. |
 | `step5_combined.py` | test | Both sensors, one loop, rate benchmark. |
-| `step6_motors.py` | test | **PROPS OFF.** DRV8833 wake, per-motor spin, all-four load, fault monitor. |
+| `step6_motors.py` | test | **PROPS OFF.** Per-motor spin, all-four load, nFAULT monitor, status LED. EEP wake only if `MOTOR_SLEEP_DRIVE=True`. |
 | `main.py` | boot | All commented out on purpose. |
 
 ---
@@ -185,8 +189,15 @@ interactive wiring page is `docs/esp-fly-wiring.html`.
   GPIO 1 = front-right, 2 = rear-right, 3 = front-left, 4 = rear-left
   (left side verified by single-pin isolation 2026-08-19 — the original
   wiring notes had it swapped)
-- EEP (nSLEEP) on GPIO 5, ULT (nFAULT) on GPIO 6 — each one wire
-  Y-spliced to both modules. J1 cleared on both or EEP does nothing.
+- ULT (nFAULT) on GPIO 5, EEP (nSLEEP) on GPIO 6 — each one wire
+  Y-spliced to both modules (as-built map 2026-09-11; the first
+  bring-up notes had these two swapped). J1 cleared on both or EEP does
+  nothing. `step6_motors` does not drive EEP unless
+  `MOTOR_SLEEP_DRIVE = True` in `config.py` — leave it False until the
+  bench confirms GPIO 6 really is nSLEEP.
+- MPU-6050 INT on GPIO 13 (ESP-Drone needs it; MicroPython steps poll).
+- Onboard WS2812 on GPIO 21 is the status LED: white = starting,
+  amber = motor being driven, green = pass, red = fault.
 - Motor VCC/GND at the star point, fed by both the battery and the
   board's 5V rail — **motors spin on USB power alone** (verified live
   2026-08-18), so every test run is live
