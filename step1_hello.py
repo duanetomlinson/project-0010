@@ -45,15 +45,12 @@ def blink(count=5):
 
     if config.LED_IS_NEOPIXEL:
         try:
-            import neopixel
-            np = neopixel.NeoPixel(machine.Pin(config.LED_PIN), 1)
+            import status_led       # WS2812 helper, dim colours on purpose
             print("Blinking NeoPixel on GPIO", config.LED_PIN)
             for i in range(count):
-                np[0] = (0, 20, 0)     # dim green -- full brightness is blinding
-                np.write()
+                status_led.show("ok")
                 time.sleep_ms(200)
-                np[0] = (0, 0, 0)
-                np.write()
+                status_led.off()
                 time.sleep_ms(200)
             return
         except ImportError:

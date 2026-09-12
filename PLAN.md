@@ -12,14 +12,15 @@ from git archaeology.
 | File | Type | Depends on | What it does |
 |------|------|------------|--------------|
 | `config.py` | config | — | All pins and addresses. **Edit here, nowhere else.** |
+| `status_led.py` | library | config | Onboard WS2812 (GPIO 21) helper: `set_color(r,g,b)`, `show(state)` for `boot`/`ok`/`fault`/`motor_test`, `off()`. No-op when `LED_PIN` is None. |
 | `mpu6050.py` | library | — | IMU driver. Nothing runs on import. |
 | `bmp280.py` | library | — | Barometer driver + Bosch compensation math. |
-| `step1_hello.py` | test | config | Board info + LED blink. |
+| `step1_hello.py` | test | config, status_led | Board info + LED blink. |
 | `step2_scan.py` | test | config | I2C bus scan. |
 | `step3_imu.py` | test | config, mpu6050 | Gyro calibration, live stream, six-orientation test. |
 | `step4_baro.py` | test | config, bmp280 | Chip ID, noise check, 1 m lift test. |
 | `step5_combined.py` | test | config, both drivers | Both sensors, one loop, rate benchmark. |
-| `step6_motors.py` | test | config | DRV8833 wake, per-motor spin, all-four load, fault monitor. |
+| `step6_motors.py` | test | config, status_led | Per-motor spin, all-four load, nFAULT monitor, status LED. EEP wake only when `MOTOR_SLEEP_DRIVE=True`. |
 | `main.py` | boot | — | All commented out on purpose. |
 | `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
 
@@ -29,20 +30,24 @@ from git archaeology.
  import step6_motors
         |
         v
-  [banner + 3 s abort window]        Ctrl-C anywhere
-        |                                  |
-        v                                  v
-  EEP high (wake) --5ms--> nFAULT?   [finally: duty=0,
-        | high                        EEP low, report]
+  [banner + 3 s abort window]  LED white     Ctrl-C / any exception
+        |                                          |
+        v                                          v
+  release all motor pins to inputs         [except: LED red, re-raise]
+  EEP: MOTOR_SLEEP_DRIVE? --yes--> drive    [finally: release motor pins,
+        | no (default: untouched)           release EEP to input, report]
         v
-  for each motor (FR, RR, RL, FL):
-      ramp 0 -> 30% over 300 ms      <- soft start, no inrush trip
-      hold 1.5 s, stop
-      nFAULT low? --> abort           <- overcurrent/overtemp/UVLO
+  nFAULT (pull-up read) low? --> abort, LED red
+        |
+        v
+  for each motor (FR, RR, FL, RL):    LED amber while driven
+      PWM exactly one pin: ramp 0 -> 30%, hold 1.5 s, stop, release
+      nFAULT low? --> abort            <- overcurrent/overtemp/UVLO
+      LED green
         |
         v
   all four @ 20%, 1.5 s              <- battery sag / ground path check
-      nFAULT check
+      nFAULT check, LED green
         |
         v
   PASS (human confirms position + direction by eye)
@@ -249,5 +254,58 @@ silkscreen label.
 3. [x] Render check headless over localhost (Playwright): zero console
        errors, wires reach pins.
 4. [x] Commit on `docs/esp-fly-wiring`, push, draft PR → `mvp-dual-drv8833`.
-5. [ ] When the EEP/ULT 5-6 wire question is resolved in hardware, update
-       the warning text in the page and in `config.py` together.
+5. [x] Superseded by Session 4: the as-built map resolves the 5/6
+       labels (ULT=5, EEP=6); bench confirmation still open there.
+
+## Session 4 — 2026-09-11 — As-built pin map into config.py + status LED
+
+**Trigger:** the user supplied an authoritative as-built pin map. Three
+signals differ from what `config.py` recorded during bring-up:
+
+| Signal | Was | As-built | Note |
+|--------|-----|----------|------|
+| ULT / nFAULT (both DRV8833, Y-spliced) | 6 | **5** | open-drain, active LOW, read with pull-up |
+| EEP / nSLEEP (both DRV8833, Y-spliced) | 5 | **6** | HIGH = awake |
+| MPU-6050 INT | 7 | **13** | ESP-Drone needs it; MicroPython polls |
+
+Motors (1–4), I2C (SCL 9 / SDA 10) and the WS2812 on GPIO 21 are
+unchanged. The onboard WS2812 is the only LED on the board and is now
+the status LED.
+
+**Hypothesis (not yet verified):** the swap explains the 2026-08-19
+"GPIO5 externally held HIGH" measurement — a healthy nFAULT line with
+the module's pull-up to VCC reads HIGH at rest, and GPIO5 was then
+labelled EEP. Confirm by tracing both wires at the modules before
+driving GPIO6 as an output.
+
+**Decisions:**
+- Every GPIO in every `.py` file comes from a `config.py` name; no
+  numeric pin literal outside `config.py`.
+- `MOTOR_SLEEP_DRIVE = False` (new, `config.py`) gates the only code
+  that would drive EEP. Default keeps the "do not drive" behaviour;
+  when True, `step6_motors` drives EEP HIGH to wake and releases it to
+  an input on exit (never forces it low).
+- `status_led.py` (new): `set_color`, `show(state)`, `off`. States:
+  boot = white, ok = green, fault = red, motor_test = amber. Used by
+  `step6_motors` (fault → red) and `step1_hello` (blink).
+- `espdrone-overrides.sdkconfig` / `esp-drone/` are NOT touched here —
+  a separate pass re-syncs CONFIG_MPU_PIN_INT to 13.
+
+**Plan of execution:**
+
+1. [x] `config.py`: MOTOR_FAULT=5, MOTOR_SLEEP=6, MOTOR_SLEEP_DRIVE=False,
+       MPU_INT=13; comments rewritten with the hypothesis wording.
+2. [x] `status_led.py` added; `step6_motors.py` and `step1_hello.py`
+       use it. `step6_motors.py` honours MOTOR_SLEEP_DRIVE.
+3. [x] `step2_scan.py` docstring: SDA on GPIO 10 (was stale at 8).
+4. [x] `docs/esp-fly-wiring.html`: wire data (ULT→GP5, EEP→GP6,
+       INT→GP13), legend, warnings, copyable spec.
+5. [x] README + this log updated; architectural map has `status_led.py`.
+6. [ ] Bench: trace ULT/EEP at both modules; confirm GPIO5 reads HIGH
+       via nFAULT pull-up and GPIO6 is nSLEEP. Then decide whether to
+       set MOTOR_SLEEP_DRIVE=True.
+7. [ ] Re-sync `espdrone-overrides.sdkconfig` (MPU_PIN_INT 7 → 13) and
+       re-verify the INT edge count on GPIO 13 — separate pass.
+8. [ ] Push `config.py`, `status_led.py`, `step6_motors.py`,
+       `step1_hello.py` to the board via mpremote; run step1 (LED
+       blink) and step6 (props off) and watch the status LED.

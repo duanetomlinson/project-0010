@@ -4,6 +4,13 @@ Single source of truth for pins and addresses.
 Change things HERE, not in the individual test files.
 
 Board: Waveshare ESP32-S3-Zero (ESP32-S3FH4R2, 4MB flash / 2MB PSRAM)
+
+As-built pin map (user-confirmed 2026-09-11):
+    GPIO1  M1 front-right PWM      GPIO5  ULT / nFAULT (both DRV8833)
+    GPIO2  M2 rear-right  PWM      GPIO6  EEP / nSLEEP (both DRV8833)
+    GPIO3  M4 front-left  PWM      GPIO9  I2C SCL
+    GPIO4  M3 rear-left   PWM      GPIO10 I2C SDA
+    GPIO13 MPU-6050 INT            GPIO21 WS2812 status LED (onboard)
 """
 
 # ---- I2C bus ----
@@ -19,9 +26,10 @@ I2C_ID   = 0                # hardware I2C peripheral 0
 MPU6050_ADDR = 0x68         # 0x69 if AD0 is tied high
 BMP280_ADDR  = 0x76         # 0x77 if SDO is tied high
 
-# ---- Onboard LED ----
-# S3-Zero has a WS2812 RGB LED on GPIO 21 (confirmed in Waveshare docs).
-# Set LED_PIN to None to skip the blink test entirely.
+# ---- Onboard status LED ----
+# S3-Zero has a WS2812 RGB LED on GPIO 21 -- the only LED on the board.
+# status_led.py drives it (boot / ok / fault / motor_test).
+# Set LED_PIN to None to disable every LED call.
 LED_PIN = 21
 LED_IS_NEOPIXEL = True      # WS2812 -- must be True on this board
 
@@ -42,29 +50,37 @@ MOTOR_RR = 2                # spins CW
 MOTOR_FL = 3                # spins CW
 MOTOR_RL = 4                # spins CCW
 
-# EEP (nSLEEP) -- one wire Y-spliced to both modules. HIGH = awake.
-# MEASURED 2026-08-19: this line is externally held HIGH (beats the
-# ESP32's internal pulldown), so the drivers are ALWAYS AWAKE -- most
-# likely J1 is not actually cleared, or the 5/6 wires are swapped.
-# Until that's resolved in hardware, do NOT drive this pin as an
-# output: forcing a VCC-tied line low stresses the ESP32 pin and can
-# dip the rail into UVLO (seen as a phantom nFAULT).
-MOTOR_SLEEP = 5
-
 # ULT (nFAULT) -- one wire Y-spliced to both modules. Open-drain,
-# active LOW (overcurrent / overtemp / undervoltage). Needs the ESP32's
-# internal pull-up; HIGH = healthy.
-MOTOR_FAULT = 6
+# active LOW (overcurrent / overtemp / undervoltage). Read as an input
+# with the ESP32's internal pull-up; HIGH = healthy.
+# As-built map (2026-09-11) puts this on GPIO 5, not 6 as first recorded.
+# HYPOTHESIS, to confirm on the bench: this explains the 2026-08-19
+# measurement of "GPIO5 externally held HIGH" -- a healthy nFAULT line
+# with the module's own pull-up to VCC reads HIGH at rest, and GPIO5
+# was then labelled EEP. Confirm by tracing both wires at the modules.
+MOTOR_FAULT = 5
+
+# EEP (nSLEEP) -- one wire Y-spliced to both modules. HIGH = awake.
+# As-built map (2026-09-11) puts this on GPIO 6, not 5 as first recorded.
+# Until the swap above is confirmed on the bench, do NOT drive this pin
+# as an output by default: if the line turns out to be tied to VCC,
+# forcing it low stresses the ESP32 pin and can dip the rail into UVLO
+# (seen 2026-08-19 as a phantom nFAULT).
+MOTOR_SLEEP = 6
+MOTOR_SLEEP_DRIVE = False   # opt-in: True = step6 drives EEP HIGH to wake,
+                            # releases it to input on exit. Leave False until
+                            # the bench confirms GPIO6 really is nSLEEP.
 
 # PWM: LEDC hardware, one channel per motor. 20 kHz is above audible
 # whine and well within the DRV8833's switching range.
 MOTOR_PWM_FREQ = 20_000
 
 # ---- MPU6050 data-ready interrupt ----
-# GY-521 INT pin soldered to GPIO 7 (2026-08-19). Required by
-# ESP-Drone: its sensor task blocks until the INT rising-edge ISR
-# fires. Unused by the MicroPython test steps (they poll over I2C).
-MPU_INT = 7
+# GY-521 INT pin wired to GPIO 13 (as-built map 2026-09-11; earlier
+# bring-up used GPIO 7). Required by ESP-Drone: its sensor task blocks
+# until the INT rising-edge ISR fires. Unused by the MicroPython test
+# steps (they poll over I2C).
+MPU_INT = 13
 
 # ---- Sea-level pressure, for altitude math ----
 # 1013.25 hPa is the standard default. For accurate absolute altitude,
@@ -81,5 +97,5 @@ SEA_LEVEL_HPA = 1013.25
 # GPIO 33-37   NOT broken out on this board (reserved for octal PSRAM)
 # GPIO 43,44   UART0 TX/RX (the TX/RX silkscreen pads)
 #
-# 24 GPIOs are broken out. Current pin map: motors 1-4, EEP 5, ULT 6,
-# MPU INT 7, I2C on 9/10. GPIO 3 caveat is at the motor section above.
+# 24 GPIOs are broken out. Current pin map: motors 1-4, ULT 5, EEP 6,
+# I2C on 9/10, MPU INT 13. GPIO 3 caveat is at the motor section above.
