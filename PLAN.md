@@ -21,6 +21,7 @@ from git archaeology.
 | `step5_combined.py` | test | config, both drivers | Both sensors, one loop, rate benchmark. |
 | `step6_motors.py` | test | config | DRV8833 wake, per-motor spin, all-four load, fault monitor. |
 | `main.py` | boot | — | All commented out on purpose. |
+| `docs/esp-fly-wiring.html` | doc | config (by hand) | Interactive wiring page: SVG board + both DRV8833s + sensors + power star, copyable spec. Re-sync whenever `config.py` pins change. |
 
 ### step6_motors.py logic
 
@@ -220,3 +221,33 @@ Next (flight bring-up) — **POWER IS THE CURRENT FOCUS**:
 Minor / cosmetic: battery-voltage ADC not wired (battery warnings
 bogus), buzzer/LED pin defaults don't match this board (disable or
 ignore), set a unique WIFI_BASE_SSID.
+
+## Session 3 — 2026-09-11 — Interactive wiring page (docs/esp-fly-wiring.html)
+
+**Plan:** replace the stale Aug 17 wiring page (lived in ~/Downloads, five
+pins wrong: SDA on 8, EEP on 7, no MPU INT, left corners swapped) with a
+single-file interactive page inside the repo, sourced from `config.py`.
+
+**Sources:** `config.py` for every GPIO (I2C verified 2026-08-16, corners
+2026-08-19, MPU INT 2026-08-19); Waveshare ESP32-S3-Zero pin-definition
+image (2026-09-11) for the physical rail order — left rail 5V, GND, 3V3,
+GP1–GP6; right rail TX, RX, GP13–GP7. Every wire in this build lands on
+those two rails. DRV8833 pad order on the drawing is schematic; solder by
+silkscreen label.
+
+**Plan of execution:**
+
+1. [x] Build `docs/esp-fly-wiring.html` with the `wiring-playground`
+       pattern: wire list as data → SVG, connection table, warnings,
+       copyable spec. Both modules show IN1–IN4, EEP, ULT, VCC, GND;
+       IN2/IN4 jumpered to each module's own GND pad; EEP/ULT Y-spliced
+       to GPIO 5/6; MPU INT on GPIO 7; AD0/SDO to GND (0x68 / 0x76).
+       Safety callouts: props off / every run live on USB, USB+battery
+       unverified, EEP held high externally.
+2. [x] Fix README motor line (3 = front-left, 4 = rear-left) and point
+       README at the page.
+3. [x] Render check headless over localhost (Playwright): zero console
+       errors, wires reach pins.
+4. [x] Commit on `docs/esp-fly-wiring`, push, draft PR → `mvp-dual-drv8833`.
+5. [ ] When the EEP/ULT 5-6 wire question is resolved in hardware, update
+       the warning text in the page and in `config.py` together.
